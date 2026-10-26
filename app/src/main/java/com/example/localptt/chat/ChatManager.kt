@@ -1,13 +1,18 @@
 package com.example.localptt.chat
 
 import android.content.Context
+import android.graphics.Bitmap
+import android.graphics.BitmapFactory
+import android.graphics.ImageDecoder
 import android.media.MediaRecorder
 import android.net.Uri
+import android.os.Build
 import android.util.Log
 import com.example.localptt.AppBus
 import com.example.localptt.data.*
 import com.example.localptt.net.lanIpv4
 import com.example.localptt.net.localIpv4
+import com.example.localptt.net.localIpv4For
 import com.example.localptt.net.netScope
 import com.example.localptt.net.p2pIpv4
 import kotlinx.coroutines.Dispatchers
@@ -64,13 +69,22 @@ class ChatManager(private val ctx: Context) {
     /** @return 是否真的发出去了（没建网时返回 false，UI 据此提示）。 */
     fun sendText(to: String, text: String) = emit(ChatMsg(myId(), to, uid(), "text", text, now()))
     fun sendEmoji(to: String, emoji: String) = emit(ChatMsg(myId(), to, uid(), "emoji", emoji, now()))
-    fun sendPhoto(to: String, uri: Uri) =
-        emit(ChatMsg(myId(), to, uid(), "photo", uri.toString(), now()))
+
+    /**
+     * 发照片：先在本机压成不超过 1280px 的 JPEG（q80），再和语音一样由本机的
+     * [VoiceFileServer] 提供下载（参考 WDCable/RoseChat：大文件走文件通道，不当消息体）。
+     * @return false = 图片解码失败（UI 提示），或没建网。
+     */
+    fun sendPhoto(to: String, uri: Uri): Boolean {
+        val f = savePhoto(uri) ?: return false
+        return emit(ChatMsg(myId(), to, uid(), "photo", mediaUrl(f), now()))
+    }
 
     /** 开始录制语音消息（无录音权限或设备不支持时静默失败，不崩溃）。 */
     fun startVoice() {
         runCatching {
-            voiceFile = File(voiceDir, "voice_${System.currentTimeMillis()}.m4a")
+            // 文件名带随机串：多台设备同一毫秒录音也不会撞名，接收方缓存不会被覆盖
+            voiceFile = File(voiceDir, "voice_${System.currentTimeMillis()}_${uid()}.m4a")
             @Suppress("DEPRECATION")     // MediaRecorder() 在 API 31 弃用，minSdk 24 需保留
             val r = MediaRecorder()
             recorder = r
@@ -97,7 +111,7 @@ class ChatManager(private val ctx: Context) {
         val f = voiceFile ?: return 0L
         voiceFile = null
         if (!f.exists() || f.length() <= 0) return 0L
-        return if (emit(VoiceMeta(myId(), to, uid(), dur, voiceUrl(f)))) dur else 0L
+        return if (emit(VoiceMeta(myId(), to, uid(), dur, mediaUrl(f)))) dur else 0L
     }
 
     fun cancelVoice() {
@@ -108,23 +122,112 @@ class ChatManager(private val ctx: Context) {
         voiceFile = null
     }
 
-    /** 下载对端语音消息到本地缓存。 */
-    fun downloadVoice(url: String, onReady: (File?) -> Unit) {
+    /** URL 对应的本地文件：同名文件已存在（自己发的 / 之前下过的）就直接复用。 */
+    fun localMedia(url: String): File? {
+        val name = fileNameOf(url) ?: return null
+        val f = File(voiceDir, name)
+        return if (f.isFile && f.length() > 0) f else null
+    }
+
+    /**
+     * 下载对端媒体（语音 / 照片）到本地缓存。
+     * 先写 `.part` 再改名，避免把半截文件当完整文件；同名已存在则不重复下载。
+     */
+    fun fetchMedia(url: String, onReady: (File?) -> Unit) {
+        localMedia(url)?.let { onReady(it); return }
         scope.launch {
+            val name = fileNameOf(url) ?: "dl_${System.currentTimeMillis()}"
+            val dest = File(voiceDir, name)
+            val tmp = File(voiceDir, "$name.part")
             val f = runCatching {
-                val out = File(voiceDir, "dl_${System.currentTimeMillis()}.m4a")
                 val conn = (URL(url).openConnection() as HttpURLConnection).apply {
                     connectTimeout = 5000
-                    readTimeout = 5000
+                    readTimeout = 10_000
                 }
-                conn.inputStream.use { input ->
-                    FileOutputStream(out).use { input.copyTo(it) }
-                }
+                conn.inputStream.use { input -> FileOutputStream(tmp).use { input.copyTo(it) } }
                 conn.disconnect()
-                out
-            }.onFailure { Log.w("LocalPTT", "语音下载失败：${it.message}") }.getOrNull()
+                if (tmp.length() <= 0) error("empty body")
+                if (!tmp.renameTo(dest)) {
+                    tmp.copyTo(dest, overwrite = true)
+                    tmp.delete()
+                }
+                dest
+            }.onFailure {
+                Log.w("LocalPTT", "媒体下载失败：${it.message}")
+                runCatching { tmp.delete() }
+            }.getOrNull()
             withContext(Dispatchers.Main) { onReady(f) }
         }
+    }
+
+    private fun fileNameOf(url: String): String? =
+        url.substringAfterLast('/').substringBefore('?').takeIf { it.isNotBlank() }
+
+    /** 把选中的照片压成最长边 1280 的 JPEG（q80），落到本机分享目录。 */
+    private fun savePhoto(uri: Uri): File? = runCatching {
+        val bmp = decodeScaled(uri, 1280) ?: return null
+        val f = File(voiceDir, "photo_${System.currentTimeMillis()}_${uid()}.jpg")
+        FileOutputStream(f).use { bmp.compress(Bitmap.CompressFormat.JPEG, 80, it) }
+        bmp.recycle()
+        if (f.length() > 0) f else null
+    }.onFailure { Log.w("LocalPTT", "照片压缩失败：${it.message}") }.getOrNull()
+
+    /**
+     * 解码并缩放到最长边不超过 [maxSide]。
+     * API 28+ 走 ImageDecoder（按 EXIF 自动摆正方向）；旧机型用两遍采样解码兜底。
+     */
+    private fun decodeScaled(uri: Uri, maxSide: Int): Bitmap? {
+        if (Build.VERSION.SDK_INT >= 28) {
+            val bmp = runCatching {
+                ImageDecoder.decodeBitmap(
+                    ImageDecoder.createSource(ctx.contentResolver, uri)
+                ) { d, info, _ ->
+                    d.allocator = ImageDecoder.ALLOCATOR_SOFTWARE   // 压缩需要可读像素
+                    val w = info.size.width
+                    val h = info.size.height
+                    val s = maxSide.toFloat() / maxOf(w, h)
+                    if (s < 1f) {
+                        d.setTargetSize(
+                            (w * s).toInt().coerceAtLeast(1),
+                            (h * s).toInt().coerceAtLeast(1)
+                        )
+                    }
+                }
+            }.onFailure { Log.w("LocalPTT", "ImageDecoder 解码失败：${it.message}") }.getOrNull()
+            if (bmp != null) return bmp
+        }
+        val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
+        ctx.contentResolver.openInputStream(uri)?.use { BitmapFactory.decodeStream(it, null, bounds) }
+        if (bounds.outWidth <= 0 || bounds.outHeight <= 0) return null
+        var sample = 1
+        while (maxOf(bounds.outWidth, bounds.outHeight) / sample > maxSide * 2) sample *= 2
+        val raw = ctx.contentResolver.openInputStream(uri)?.use {
+            BitmapFactory.decodeStream(
+                it, null, BitmapFactory.Options().apply { inSampleSize = sample }
+            )
+        } ?: return null
+        val scale = maxSide.toFloat() / maxOf(raw.width, raw.height)
+        return if (scale < 1f) {
+            val out = Bitmap.createScaledBitmap(
+                raw,
+                (raw.width * scale).toInt().coerceAtLeast(1),
+                (raw.height * scale).toInt().coerceAtLeast(1),
+                true
+            )
+            raw.recycle()
+            out
+        } else raw
+    }
+
+    /**
+     * 媒体文件对外 URL：优先选**和当前对端在同一网段**的本机地址。
+     * 直连模式下若用 wlan 地址，对方（p2p 网段）根本连不上 → 语音/照片永远下载失败。
+     */
+    private fun mediaUrl(f: File): String {
+        val peerIp = AppBus.others.firstOrNull()?.ip
+        val myIp = peerIp?.let { localIpv4For(it) }
+            ?: lanIpv4() ?: p2pIpv4() ?: localIpv4() ?: "127.0.0.1"
+        return "http://$myIp:${VoiceFileServer.PORT}/${f.name}"
     }
 
     /** 信令分发入口（由 MainActivity.dispatch 调用）。 */
@@ -139,13 +242,6 @@ class ChatManager(private val ctx: Context) {
         if (ok) AppBus.post(m)
         _inbound.tryEmit(m)         // 本地回显，发送方立刻看到自己发的消息
         return ok
-    }
-
-    /** 语音文件对外 URL：**发送方自己**的 IP（每台设备都起 VoiceFileServer）。 */
-    private fun voiceUrl(f: File): String {
-        // 直连模式必须给对端 p2p 网段地址；局域网模式优先 wlan，最后才退到任意网卡
-        val myIp = lanIpv4() ?: p2pIpv4() ?: localIpv4() ?: "127.0.0.1"
-        return "http://$myIp:${VoiceFileServer.PORT}/${f.name}"
     }
 
     private fun myId() = AppBus.myId

@@ -56,7 +56,14 @@ class VoiceFileServer(
                 if (!ok || file == null) {
                     respond(s.getOutputStream(), 404, "text/plain", "not found".toByteArray())
                 } else {
-                    respond(s.getOutputStream(), 200, "audio/mp4", file.readBytes())
+                    // 语音（m4a）和照片（jpg）共用这一个轻量文件服务，按扩展名给 Content-Type
+                    val mime = when (file.extension.lowercase()) {
+                        "jpg", "jpeg" -> "image/jpeg"
+                        "png" -> "image/png"
+                        "m4a", "mp4", "aac" -> "audio/mp4"
+                        else -> "application/octet-stream"
+                    }
+                    respond(s.getOutputStream(), 200, mime, file.readBytes())
                 }
             }
         }

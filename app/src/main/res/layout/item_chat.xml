@@ -1,9 +1,23 @@
 <?xml version="1.0" encoding="utf-8"?>
-<FrameLayout xmlns:android="http://schemas.android.com/apk/res/android"
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:orientation="vertical"
     android:layout_width="match_parent"
     android:layout_height="wrap_content"
     android:paddingHorizontal="10dp"
     android:paddingVertical="5dp">
+
+    <ImageView
+        android:id="@+id/ivPhoto"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:maxWidth="220dp"
+        android:maxHeight="220dp"
+        android:adjustViewBounds="true"
+        android:scaleType="fitCenter"
+        android:padding="3dp"
+        android:visibility="gone"
+        android:contentDescription="照片"
+        android:layout_gravity="start" />
 
     <TextView
         android:id="@+id/tvBubble"
@@ -16,4 +30,4 @@
         android:lineSpacingExtra="2dp"
         android:textColor="#3B2E22"
         android:layout_gravity="start" />
-</FrameLayout>
+</LinearLayout>

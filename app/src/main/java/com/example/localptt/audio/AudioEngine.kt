@@ -2,7 +2,9 @@ package com.example.localptt.audio
 
 import android.content.Context
 import android.media.*
+import android.media.audiofx.AcousticEchoCanceler
 import android.media.audiofx.AutomaticGainControl
+import android.media.audiofx.NoiseSuppressor
 import android.util.Log
 import com.example.localptt.net.UdpBus
 import com.example.localptt.net.netGuard
@@ -75,6 +77,9 @@ class AudioEngine(
     private var savedMode: Int? = null
     private var savedSpeaker: Boolean? = null
     private var agc: AutomaticGainControl? = null
+    private var aec: AcousticEchoCanceler? = null
+    private var ns: NoiseSuppressor? = null
+    private var focusRequest: AudioFocusRequest? = null
 
     private fun createCodec(): AudioCodec {
         if (useOpus) {
@@ -100,7 +105,16 @@ class AudioEngine(
                 return false
             }
             applyRouting()
-            attachAgc()
+            // 参考 meshenger：通话类音频必须抢 AudioFocus，否则被音乐/其它 App 抢走时直接没声
+            requestFocus()
+            // ★ 麦克风常开：PTT 只在「发不发包」上做开关，不再反复 startRecording/stopRecording。
+            //   过去每次按下都要重新启动录音（几十到几百毫秒），导致「开头一两个字被吞掉」。
+            rec?.let { r ->
+                attachEffects(r.audioSessionId)
+                runCatching { r.startRecording() }
+                captureJob?.cancel()
+                captureJob = scope.launch { captureLoop() }
+            }
             bus.startReceiving()
             scope.launch { receiveLoop() }
             true
@@ -149,7 +163,7 @@ class AudioEngine(
         //   过去扬声器模式用 USAGE_MEDIA、听筒模式用 USAGE_VOICE_COMMUNICATION，
         //   两者与 AudioManager.mode 混搭时，部分机型会直接把播放静音。
         runCatching {
-            AudioTrack.Builder()
+            val b = AudioTrack.Builder()
                 .setAudioAttributes(
                     AudioAttributes.Builder()
                         .setUsage(AudioAttributes.USAGE_VOICE_COMMUNICATION)
@@ -158,7 +172,11 @@ class AudioEngine(
                 .setAudioFormat(fmt)
                 .setBufferSizeInBytes(buf)
                 .setTransferMode(AudioTrack.MODE_STREAM)
-                .build()
+            // 低延迟播放通路（参考 meshenger 的低延迟通话）：API 26+ 可用
+            if (android.os.Build.VERSION.SDK_INT >= 26) {
+                b.setPerformanceMode(AudioTrack.PERFORMANCE_MODE_LOW_LATENCY)
+            }
+            b.build()
         }.onSuccess {
             if (it.state == AudioTrack.STATE_INITIALIZED) return it
             runCatching { it.release() }
@@ -188,14 +206,61 @@ class AudioEngine(
         }
     }
 
-    /** 硬件自动增益：能显著提升采集音量（设备支持时）。 */
-    private fun attachAgc() {
+    /**
+     * 音频效果链（参考 meshenger 的 JavaAudioDeviceModule 配置）：
+     * AGC 提音量、AEC 消对讲外放的回声、NS 压环境噪声。设备支持才挂，避免抛异常。
+     */
+    private fun attachEffects(sessionId: Int) {
         runCatching {
-            val r = rec ?: return
             if (AutomaticGainControl.isAvailable()) {
-                agc = AutomaticGainControl.create(r.audioSessionId)?.apply { enabled = true }
+                agc = AutomaticGainControl.create(sessionId)?.apply { enabled = true }
             }
         }.onFailure { Log.w("LocalPTT", "AGC 不可用：${it.message}") }
+        runCatching {
+            if (AcousticEchoCanceler.isAvailable()) {
+                aec = AcousticEchoCanceler.create(sessionId)?.apply { enabled = true }
+            }
+        }.onFailure { Log.w("LocalPTT", "AEC 不可用：${it.message}") }
+        runCatching {
+            if (NoiseSuppressor.isAvailable()) {
+                ns = NoiseSuppressor.create(sessionId)?.apply { enabled = true }
+            }
+        }.onFailure { Log.w("LocalPTT", "NS 不可用：${it.message}") }
+    }
+
+    /** 抢音频焦点（通话类），release 时归还。 */
+    private fun requestFocus() {
+        val m = am ?: return
+        runCatching {
+            if (android.os.Build.VERSION.SDK_INT >= 26) {
+                val req = AudioFocusRequest.Builder(AudioManager.AUDIOFOCUS_GAIN_TRANSIENT)
+                    .setAudioAttributes(
+                        AudioAttributes.Builder()
+                            .setUsage(AudioAttributes.USAGE_VOICE_COMMUNICATION)
+                            .setContentType(AudioAttributes.CONTENT_TYPE_SPEECH).build()
+                    ).build()
+                focusRequest = req
+                m.requestAudioFocus(req)
+            } else {
+                @Suppress("DEPRECATION")
+                m.requestAudioFocus(
+                    null, AudioManager.STREAM_VOICE_CALL, AudioManager.AUDIOFOCUS_GAIN_TRANSIENT
+                )
+            }
+        }.onFailure { Log.w("LocalPTT", "音频焦点申请失败：${it.message}") }
+    }
+
+    private fun abandonFocus() {
+        val m = am ?: return
+        runCatching {
+            if (android.os.Build.VERSION.SDK_INT >= 26) {
+                focusRequest?.let { m.abandonAudioFocusRequest(it) }
+            } else {
+                @Suppress("DEPRECATION")
+                m.abandonAudioFocus(null)
+            }
+        }
+        focusRequest = null
     }
 
     /** 切换扬声器/听筒（只改音频路由，不重建音轨，避免切换瞬间丢声音）。 */
@@ -215,20 +280,17 @@ class AudioEngine(
         }
     }
 
-    /** 按住说话：开始采集并广播。 */
+    /**
+     * 按住说话：只切换「发不发包」，麦克风保持常开（按键即出声，没有启动延迟）。
+     * 参考 meshenger 的 PTT：用轨道 enable/disable 而不是反复停启采集。
+     */
     fun pushToTalk(on: Boolean) {
-        if (on && !talking) {
+        if (on) {
             if (rec == null) return
             talking = true
-            runCatching { rec?.startRecording() }
             runCatching { track?.play() }
-            captureJob?.cancel()
-            captureJob = scope.launch { captureLoop() }
-        } else if (!on && talking) {
+        } else {
             talking = false
-            captureJob?.cancel()
-            captureJob = null
-            runCatching { rec?.stop() }
         }
     }
 
@@ -236,26 +298,20 @@ class AudioEngine(
     fun startHandsFree() {
         if (handsFree) return
         handsFree = true
-        runCatching { rec?.startRecording() }
         runCatching { track?.play() }
-        captureJob?.cancel()
-        captureJob = scope.launch { captureLoop() }
     }
 
     fun stopHandsFree() {
-        if (!handsFree) return
         handsFree = false
-        captureJob?.cancel()
-        captureJob = null
-        runCatching { rec?.stop() }
     }
 
     private suspend fun captureLoop() {
         val pcm = ShortArray(frameSamples)
-        while (talking || handsFree) {
-            currentCoroutineContext().ensureActive()
+        while (isActive) {
             val n = runCatching { rec?.read(pcm, 0, frameSamples) ?: 0 }.getOrDefault(0)
-            if (n <= 0) continue
+            if (n <= 0) { delay(20); continue }     // 读失败/无数据：别空转烧 CPU
+            // 没在说话就把缓冲读空，不编码、不发包
+            if (!talking && !handsFree) continue
             applyGain(pcm, n, recGain)
             val enc = runCatching { codec.encode(pcm, n) }.getOrDefault(ByteArray(0))
             if (enc.isNotEmpty()) bus.sendFrame(seq++, enc)
@@ -304,7 +360,10 @@ class AudioEngine(
         runCatching { track?.stop() }
         runCatching { track?.release() }
         runCatching { agc?.release() }
+        runCatching { aec?.release() }
+        runCatching { ns?.release() }
         runCatching { codec.release() }
+        abandonFocus()
         // 还原系统音频路由，别把其它 App 的通话模式带歪
         runCatching {
             val m = am ?: return@runCatching
@@ -312,7 +371,7 @@ class AudioEngine(
             savedSpeaker?.let { m.isSpeakerphoneOn = it }
         }
         scope.cancel()
-        rec = null; track = null; agc = null
+        rec = null; track = null; agc = null; aec = null; ns = null
     }
 }
 

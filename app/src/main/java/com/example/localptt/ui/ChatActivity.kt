@@ -1,18 +1,23 @@
 package com.example.localptt.ui
 
+import android.graphics.Bitmap
+import android.graphics.BitmapFactory
 import android.media.MediaPlayer
 import android.net.Uri
 import android.os.Bundle
 import android.view.Gravity
 import android.view.LayoutInflater
+import android.view.MotionEvent
 import android.view.View
 import android.view.ViewGroup
-import android.widget.Toast
 import android.widget.ArrayAdapter
 import android.widget.EditText
-import android.widget.FrameLayout
+import android.widget.ImageView
+import android.widget.LinearLayout
 import android.widget.TextView
+import android.widget.Toast
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.appcompat.app.AlertDialog
 import androidx.appcompat.app.AppCompatActivity
 import androidx.lifecycle.lifecycleScope
 import androidx.recyclerview.widget.LinearLayoutManager
@@ -27,35 +32,41 @@ import com.example.localptt.data.FeatureSync
 import com.example.localptt.data.Msg
 import com.example.localptt.data.VoiceMeta
 import com.example.localptt.net.uid
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
+import java.io.File
 
 /**
  * 微聊页：文字 / 表情 / 语音消息 / 照片。
  *
- * ★ 历史 Bug 修复（发的消息对方收不到）：
- *  1. ChatManager 现在由 App.onCreate 创建一次（进程内单例），不再随建网/重连重建；
- *     过去功能页订阅的是旧实例的消息流，重连后就成了「能发出去、但永远收不到」。
- *  2. 消息流订阅改为**可自愈**：即使打开页面时管理器还没就绪，也会轮询到可用再订阅。
- *  3. 发送时若尚未建网会明确提示，而不是静默丢弃。
+ * ★ 本轮修复（参考 RoseChat / WDCable_flutter）：
+ *  1. **照片真的能收发**：过去只发了一个 `content://` 索引，对端看到的永远是「📷 [照片]」占位。
+ *     现在发送前压成 ≤1280px JPEG（q80），和语音一样由本机文件服务提供下载，
+ *     接收方收到后直接显示缩略图，点一下看大图。
+ *  2. **消息去重**：按消息 id 去重，页面重进/流回放不会再出现重复气泡。
+ *  3. **媒体缓存**：语音/照片下载一次后走本地缓存，重复点击不再重复下载；
+ *     下载先写 `.part` 再改名，不会把半截文件当完整文件播放。
+ *  4. 语音录制取消手势（ACTION_CANCEL）不再误发送。
  */
 class ChatActivity : AppCompatActivity() {
 
     private lateinit var rv: RecyclerView
     private lateinit var etInput: EditText
     private lateinit var tvPeer: TextView
-    private val adapter = ChatAdapter { m -> onBubbleClick(m) }
+    private val adapter = ChatAdapter(
+        onClick = { m -> onBubbleClick(m) },
+        loadPhoto = { url, cb -> photoBitmap(url, cb) }
+    )
 
     private var player: MediaPlayer? = null
 
+    /** 照片位图缓存（同一张图既做缩略图也做点开的大图）。 */
+    private val photoCache = HashMap<String, Bitmap>()
+
     /**
-     * 消息目标：统一**广播给房间里所有人**。
-     *
-     * ★ 过去按缓存里的 peerId 定向发送：一旦名单过期（重连过、对端掉线又回来），
-     *   主机在 peers 表里查不到这个 id，就会把消息**静默丢弃** ——
-     *   表现正是「我这边显示发出去了，对方却一条都看不到」。
-     *   广播既贴合「房间里一起聊」的场景，也彻底消除了这个静默丢弃。
-     *   接收侧靠 ChatMsg.from 区分是谁说的，多人房间同样正确。
+     * 消息目标：统一**广播给房间里所有人**，避免名单过期时主机查不到 id 而静默丢消息。
      */
     private val peerId: String get() = "all"
 
@@ -66,7 +77,7 @@ class ChatActivity : AppCompatActivity() {
 
     private val pickPhoto =
         registerForActivityResult(ActivityResultContracts.GetContent()) { uri: Uri? ->
-            if (uri != null) send { chat?.sendPhoto(peerId, uri) }
+            if (uri != null) sendPhoto(uri)
         }
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -88,9 +99,7 @@ class ChatActivity : AppCompatActivity() {
 
         findViewById<View>(R.id.btnSend).setOnClickListener {
             val t = etInput.text.toString().trim()
-            if (t.isNotEmpty()) {
-                if (send { chat?.sendText(peerId, t) }) etInput.setText("")
-            }
+            if (t.isNotEmpty() && send { chat?.sendText(peerId, t) }) etInput.setText("")
         }
 
         findViewById<View>(R.id.btnEmoji).setOnClickListener { sendEmoji() }
@@ -101,18 +110,24 @@ class ChatActivity : AppCompatActivity() {
         val tvVoiceLabel = findViewById<TextView>(R.id.tvVoiceLabel)
         btnVoice.setOnTouchListener { _, ev ->
             when (ev.action) {
-                android.view.MotionEvent.ACTION_DOWN -> {
+                MotionEvent.ACTION_DOWN -> {
                     chat?.startVoice()
                     tvVoiceIcon.text = "🔴"
                     tvVoiceLabel.text = "松手发送"
                     true
                 }
-                android.view.MotionEvent.ACTION_UP,
-                android.view.MotionEvent.ACTION_CANCEL -> {
+                MotionEvent.ACTION_UP -> {
                     send { chat?.stopVoiceAndSend(peerId) }
                     tvVoiceIcon.text = "🎤"
                     tvVoiceLabel.text = "按住说话"
                     toast("📤 语音发出去啦")
+                    true
+                }
+                MotionEvent.ACTION_CANCEL -> {
+                    // 手指滑走 = 取消，不发送
+                    chat?.cancelVoice()
+                    tvVoiceIcon.text = "🎤"
+                    tvVoiceLabel.text = "按住说话"
                     true
                 }
                 else -> false
@@ -149,14 +164,33 @@ class ChatActivity : AppCompatActivity() {
             toast("还没连上小伙伴，先回首页开房间吧")
             return false
         }
+        if (chat == null) {
+            toast("微聊还没准备好，稍等一下再试")
+            return false
+        }
         return runCatching { block() }.isSuccess
+    }
+
+    /** 照片压缩 + 发送都在后台做，避免大图解码卡住界面。 */
+    private fun sendPhoto(uri: Uri) {
+        if (AppBus.client == null && AppBus.server == null) {
+            toast("还没连上小伙伴，先回首页开房间吧")
+            return
+        }
+        toast("🖼️ 正在处理照片…")
+        lifecycleScope.launch(Dispatchers.IO) {
+            val ok = runCatching { chat?.sendPhoto(peerId, uri) }.getOrDefault(false)
+            withContext(Dispatchers.Main) {
+                toast(if (ok == true) "📤 照片发出去啦" else "😢 这张照片处理不了")
+            }
+        }
     }
 
     private fun refreshPeerBar() {
         val peer = AppBus.others.firstOrNull()
         val name = peer?.name ?: "所有人（广播）"
         tvPeer.text = "💬 正在和 $name 聊天"
-        findViewById<android.widget.ImageView>(R.id.ivChatPeerAvatar)
+        findViewById<ImageView>(R.id.ivChatPeerAvatar)
             ?.setImageResource(Avatars.drawableOf(peer?.avatar ?: "bear"))
     }
 
@@ -166,10 +200,10 @@ class ChatActivity : AppCompatActivity() {
         val labels = arrayOf("真棒", "喜欢", "太好笑", "哇！", "难过", "好耶", "厉害", "拜拜")
         val rows = emojis.mapIndexed { i, e -> "$e  ${labels[i]}" }
 
-        val adapter = ArrayAdapter(this, R.layout.item_emoji, R.id.tvEmoji, rows)
-        androidx.appcompat.app.AlertDialog.Builder(this)
+        val listAdapter = ArrayAdapter(this, R.layout.item_emoji, R.id.tvEmoji, rows)
+        AlertDialog.Builder(this)
             .setTitle("😊 选个表情")
-            .setAdapter(adapter) { _, i ->
+            .setAdapter(listAdapter) { _, i ->
                 send { chat?.sendEmoji(peerId, emojis[i]) }
             }
             .show()
@@ -177,19 +211,25 @@ class ChatActivity : AppCompatActivity() {
 
     private fun onIncoming(m: Msg) {
         runOnUiThread {
-            adapter.add(m)
-            rv.scrollToPosition(adapter.itemCount - 1)
-            refreshPeerBar()
+            if (adapter.add(m)) {
+                rv.scrollToPosition(adapter.itemCount - 1)
+                refreshPeerBar()
+            }
         }
     }
 
-    /** 点语音气泡 → 下载并播放（对方的语音存在对方手机上，需 HTTP 拉取）。 */
+    /** 点气泡：语音 → 下载后播放；照片 → 看大图。 */
     private fun onBubbleClick(m: Msg) {
-        if (m !is VoiceMeta) return
-        if (m.from == AppBus.myId) return
+        when {
+            m is VoiceMeta -> playVoice(m)
+            m is ChatMsg && m.kind == "photo" -> showBigPhoto(m.body)
+        }
+    }
+
+    private fun playVoice(m: VoiceMeta) {
         toast("⬇️ 正在收语音…")
-        chat?.downloadVoice(m.uri) { f ->
-            if (f == null) { toast("😢 这条语音没收到"); return@downloadVoice }
+        chat?.fetchMedia(m.uri) { f ->
+            if (f == null) { toast("😢 这条语音没收到"); return@fetchMedia }
             runCatching {
                 player?.release()
                 player = MediaPlayer().apply {
@@ -202,11 +242,60 @@ class ChatActivity : AppCompatActivity() {
         }
     }
 
+    private fun showBigPhoto(url: String) {
+        photoBitmap(url) { bmp ->
+            if (bmp == null) { toast("😢 照片没收到"); return@photoBitmap }
+            val iv = ImageView(this).apply {
+                setImageBitmap(bmp)
+                adjustViewBounds = true
+                scaleType = ImageView.ScaleType.FIT_CENTER
+            }
+            AlertDialog.Builder(this)
+                .setTitle("🖼️ 照片")
+                .setView(iv)
+                .setPositiveButton("关闭", null)
+                .show()
+        }
+    }
+
+    /** 异步加载照片位图：先查缓存，再走本地文件 / HTTP 下载，最后在 IO 线程解码。 */
+    private fun photoBitmap(url: String, onReady: (Bitmap?) -> Unit) {
+        photoCache[url]?.let { onReady(it); return }
+        val c = chat
+        if (c == null) { onReady(null); return }
+        c.fetchMedia(url) { f ->
+            if (f == null) { onReady(null); return@fetchMedia }
+            lifecycleScope.launch(Dispatchers.IO) {
+                val b = runCatching { decodeSampled(f, 1280) }.getOrNull()
+                withContext(Dispatchers.Main) {
+                    if (b != null) photoCache[url] = b
+                    onReady(b)
+                }
+            }
+        }
+    }
+
+    private fun decodeSampled(f: File, maxSide: Int): Bitmap? {
+        val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
+        BitmapFactory.decodeFile(f.absolutePath, bounds)
+        val w = bounds.outWidth
+        val h = bounds.outHeight
+        if (w <= 0 || h <= 0) return null
+        var sample = 1
+        while (maxOf(w, h) / sample > maxSide * 2) sample *= 2
+        return BitmapFactory.decodeFile(
+            f.absolutePath,
+            BitmapFactory.Options().apply { inSampleSize = sample }
+        )
+    }
+
     override fun onDestroy() {
         super.onDestroy()
         if (AppBus.activeFeature == Feature.CHAT) AppBus.activeFeature = null
         runCatching { player?.release() }
         player = null
+        // 位图交给 GC（这里不 recycle：正在显示的 dialog/列表可能还在用）
+        photoCache.clear()
         if (!closedByRemote) {
             runCatching {
                 AppBus.post(FeatureSync(AppBus.myId, "all", uid(), Feature.CHAT, Feature.EXIT))
@@ -217,19 +306,25 @@ class ChatActivity : AppCompatActivity() {
     private fun toast(s: String) = Toast.makeText(this, s, Toast.LENGTH_SHORT).show()
 }
 
-/** 极简聊天气泡适配器：自己靠右、对端靠左（对端会带上名字，孩子看得懂是谁说的）。 */
+/** 极简聊天气泡适配器：自己靠右、对端靠左，照片显示缩略图，按消息 id 去重。 */
 private class ChatAdapter(
-    private val onClick: (Msg) -> Unit
+    private val onClick: (Msg) -> Unit,
+    private val loadPhoto: (String, (Bitmap?) -> Unit) -> Unit
 ) : RecyclerView.Adapter<ChatAdapter.VH>() {
     private val items = mutableListOf<Msg>()
+    private val ids = HashSet<String>()
 
     class VH(v: View) : RecyclerView.ViewHolder(v) {
         val text: TextView = v.findViewById(R.id.tvBubble)
+        val photo: ImageView = v.findViewById(R.id.ivPhoto)
     }
 
-    fun add(m: Msg) {
+    /** @return true = 真的新增了一条（重复消息被丢弃）。 */
+    fun add(m: Msg): Boolean {
+        if (!ids.add(m.id)) return false
         items.add(m)
         notifyItemInserted(items.size - 1)
+        return true
     }
 
     override fun onCreateViewHolder(p: ViewGroup, t: Int): VH =
@@ -240,18 +335,39 @@ private class ChatAdapter(
         val mine = m.from == AppBus.myId
         val who = if (mine) "" else
             (AppBus.peers.firstOrNull { it.id == m.from }?.name?.let { "$it：" } ?: "小伙伴：")
+
+        val photoUrl = (m as? ChatMsg)?.takeIf { it.kind == "photo" }?.body
+        if (photoUrl != null) {
+            h.photo.visibility = View.VISIBLE
+            h.photo.tag = photoUrl
+            h.photo.setImageBitmap(null)
+            loadPhoto(photoUrl) { bmp ->
+                if (h.photo.tag == photoUrl && bmp != null) h.photo.setImageBitmap(bmp)
+            }
+        } else {
+            h.photo.visibility = View.GONE
+            h.photo.tag = null
+        }
+
         h.text.text = who + when (m) {
             is ChatMsg -> when (m.kind) {
                 "emoji" -> "😊 ${m.body}"
-                "photo" -> "📷 [照片]"
+                "photo" -> "📷 照片（点一下看大图）"
                 else -> m.body
             }
             is VoiceMeta -> "🎤 语音 ${(m.durMs / 1000).coerceAtLeast(1)} 秒（点一下听）"
             else -> m.toString()
         }
         h.text.setBackgroundResource(if (mine) R.drawable.bubble_mine else R.drawable.bubble_peer)
-        (h.text.layoutParams as FrameLayout.LayoutParams).gravity =
-            if (mine) Gravity.END else Gravity.START
+        h.photo.setBackgroundResource(if (mine) R.drawable.bubble_mine else R.drawable.bubble_peer)
+
+        val lp = h.text.layoutParams as LinearLayout.LayoutParams
+        lp.gravity = if (mine) Gravity.END else Gravity.START
+        h.text.layoutParams = lp
+        val plp = h.photo.layoutParams as LinearLayout.LayoutParams
+        plp.gravity = if (mine) Gravity.END else Gravity.START
+        h.photo.layoutParams = plp
+
         h.itemView.setOnClickListener { onClick(m) }
     }
 

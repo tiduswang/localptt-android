@@ -75,6 +75,26 @@ fun lanIpv4(): String? = ipv4On {
 fun p2pIpv4(): String? = ipv4On { it.startsWith("p2p") }
 
 /**
+ * 与 [peerIp] 同一 /24 网段的本机 IPv4（任一块网卡）。
+ * 用于给对方拼「媒体文件下载地址」：直连模式要用 p2p 地址、局域网模式要用 wlan 地址，
+ * 否则对方拿到的是另一张网卡的地址，永远连不上。
+ */
+fun localIpv4For(peerIp: String): String? {
+    val prefix = peerIp.split('.').take(3).joinToString(".")
+    if (prefix.count { it == '.' } != 2) return null
+    return runCatching {
+        NetworkInterface.getNetworkInterfaces()?.toList().orEmpty()
+            .asSequence()
+            .filter { it.isUp && !it.isLoopback }
+            .flatMap { it.interfaceAddresses.asSequence() }
+            .map { it.address }
+            .filterIsInstance<java.net.Inet4Address>()
+            .mapNotNull { it.hostAddress }
+            .firstOrNull { it.startsWith("$prefix.") }
+    }.getOrNull()
+}
+
+/**
  * 本机在 **Wi-Fi / 以太网 / Wi-Fi Direct** 网卡上的 IPv4；没有则返回 null。
  *
  * 与 [localIpv4] 的区别：后者会把移动数据网卡的地址也算进来。判断「此刻是否在
