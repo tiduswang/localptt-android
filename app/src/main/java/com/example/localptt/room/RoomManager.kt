@@ -496,7 +496,7 @@ object RoomManager {
         val goAddress: InetAddress? = withTimeoutOrNull(P2P_TIMEOUT_MS) {
             runCatching { mgr.removeGroup() }
             delay(600)  // 给系统一点时间释放旧组
-            suspendCancellableCoroutine { cont ->
+            suspendCancellableCoroutine<InetAddress?> { cont ->
                 var resumed = false
                 runCatching {
                     mgr.createGroup { ok, info ->
