@@ -1,0 +1,28 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- 桌面图标：粉色圆底 + 白色对话气泡 + 三个点，可爱又好认 -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="48dp"
+    android:height="48dp"
+    android:viewportWidth="48"
+    android:viewportHeight="48">
+
+    <path
+        android:fillColor="#FF8FB1"
+        android:pathData="M24,24 m-24,0 a24,24 0 1,0 48,0 a24,24 0 1,0 -48,0" />
+
+    <path
+        android:fillColor="#FFFFFF"
+        android:pathData="M13,12 H35 A5,5 0 0 1 40,17 V28 A5,5 0 0 1 35,33 H24 L18,39 V33 H13 A5,5 0 0 1 8,28 V17 A5,5 0 0 1 13,12 Z" />
+
+    <path
+        android:fillColor="#FF8FB1"
+        android:pathData="M17,22.5 m-2.4,0 a2.4,2.4 0 1,0 4.8,0 a2.4,2.4 0 1,0 -4.8,0" />
+
+    <path
+        android:fillColor="#FF8FB1"
+        android:pathData="M24,22.5 m-2.4,0 a2.4,2.4 0 1,0 4.8,0 a2.4,2.4 0 1,0 -4.8,0" />
+
+    <path
+        android:fillColor="#FF8FB1"
+        android:pathData="M31,22.5 m-2.4,0 a2.4,2.4 0 1,0 4.8,0 a2.4,2.4 0 1,0 -4.8,0" />
+</vector>
