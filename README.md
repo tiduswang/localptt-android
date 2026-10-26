@@ -9,13 +9,13 @@
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 [![Min SDK](https://img.shields.io/badge/minSdk-24_(Android_7.0)-orange.svg)](app/build.gradle.kts)
 [![Build](https://github.com/tiduswang/localptt-android/actions/workflows/build.yml/badge.svg)](https://github.com/tiduswang/localptt-android/actions/workflows/build.yml)
-[![Version](https://img.shields.io/badge/version-1.2.1-brightgreen.svg)](CHANGELOG.md)
+[![Version](https://img.shields.io/badge/version-1.2.2-brightgreen.svg)](CHANGELOG.md)
 
 ## ✨ 功能特性
 
 | 功能 | 说明 |
 |---|---|
-| 🎤 **实时语音对讲** | 半双工 PTT；免提（🔊大喇叭）/ 听筒（📞小听筒）一键切换；采集 MIC 优先 + 增益，播放放大 |
+| 🎤 **实时语音对讲** | 半双工 PTT；免提（🔊大喇叭）/ 听筒（📞小听筒）一键切换；**🎧 听对方：开/关**随时静音；采集 MIC 优先 + 增益，播放放大 |
 | 📹 **实时视频对讲** | Camera2 + MediaCodec H.264 → RTP/UDP；进页自动接通，优先前置摄像头，叠加免提语音 |
 | 💬 **微聊** | 表情 / 文字 / 照片 / 语音消息，可靠送达；语音消息由发送方本机 HTTP 服务提供 |
 | 🎮 **联机小游戏** | 猜拳、掷骰子比大小；**commit-reveal（SHA-256 承诺）防作弊**，双方各自独立裁定 |
@@ -45,7 +45,7 @@ gradlew.bat assembleDebug      # Windows
 > 产物：`app/build/outputs/apk/debug/app-debug.apk`（约 10 MB，包名 `com.example.localptt`）。
 
 不想自己编译？直接下载现成的安装包：
-**[localptt-1.2.1-debug.apk](https://github.com/tiduswang/localptt-android/releases/download/v1.2.1/localptt-1.2.1-debug.apk)**（debug 签名，仅用于测试）。
+**[localptt-1.2.2-debug.apk](https://github.com/tiduswang/localptt-android/releases/download/v1.2.2/localptt-1.2.2-debug.apk)**（debug 签名，仅用于测试）。
 
 ### 3. 真机运行与验收
 语音对讲 / 视频 / Wi-Fi Direct 需**真机**（模拟器不支持 P2P 与摄像头）。

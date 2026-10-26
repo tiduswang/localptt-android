@@ -82,6 +82,10 @@ class ControlServer(
     }
 
     private fun handleClient(sock: Socket) {
+        // ★ 关闭 Nagle：信令都是几十字节的小包，Nagle + 延迟 ACK 会给每条消息叠加几十到上百毫秒，
+        //   游戏里表现为「出招后要等好久才有结果」。
+        runCatching { sock.tcpNoDelay = true }
+        runCatching { sock.keepAlive = true }
         val writer = runCatching { PrintWriter(sock.getOutputStream(), true) }.getOrNull()
             ?: return
         var id = ""

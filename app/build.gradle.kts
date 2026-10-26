@@ -12,9 +12,9 @@ android {
         applicationId = "com.example.localptt"
         minSdk = 24          // Android 7.0：Camera2/MediaCodec/ WiFi P2P 均可用
         targetSdk = 34
-        versionCode = 8
-        versionName = "1.2.1"
-        // 语音编解码走 MediaCodec AMR-NB（本机构未装 NDK，暂不编译 Opus 原生库）
+        versionCode = 9
+        versionName = "1.2.2"
+        // 语音统一走 PCM 直通（8kHz/16bit），不依赖设备侧 AMR 编解码器
     }
 
     buildTypes {

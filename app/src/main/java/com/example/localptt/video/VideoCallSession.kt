@@ -20,6 +20,7 @@ import com.example.localptt.net.RtpSocket
 import com.example.localptt.net.VideoMarker
 import kotlinx.coroutines.*
 import java.nio.ByteBuffer
+import java.util.ArrayDeque
 
 /**
  * 实时视频对讲（1 对 1 点对点）。
@@ -78,17 +79,35 @@ class VideoCallSession(
     private var encInputSurface: Surface? = null
     private var cameraDevice: CameraDevice? = null
     private var captureSession: CameraCaptureSession? = null
-    private val pendingConfig = mutableListOf<ByteArray>()   // 对端待喂的参数集
+
+    /** 本机编码器的参数集（SPS/PPS），周期性重发给对端。 */
+    @Volatile private var csdList: List<ByteArray> = emptyList()
+
+    /**
+     * 解码器输入队列。
+     * ★ 修复：解码器用 setCallback 进入**异步模式**，此时不允许再调 dequeueInputBuffer
+     *   （会抛 IllegalStateException，把接收协程直接打死 → 只有本地预览）。
+     *   现在改成「回调给出空闲缓冲 → 我们从队列里灌数据」，异步模式下完全合法。
+     */
+    private class DecFrame(val data: ByteArray, val flags: Int)
+
+    private val inLock = Any()
+    private val pendingFrames = ArrayDeque<DecFrame>()
+    private val freeInputs = ArrayDeque<Int>()
+
+    /** 对端发来的参数集，关键帧前先喂给解码器。 */
+    private val configQueue = ArrayDeque<ByteArray>()
 
     fun start() {
         startEncoder()
         startDecoder()
         openCamera()
-        scope.launch { rtp.receive { payload, marker -> onPacket(marker, payload) } }
-        // 周期性要关键帧：让对端在丢包/切分辨率后尽快恢复画面
+        scope.launch { rtp.receive { marker, payload -> onPacket(marker, payload) } }
+        // 周期性重发参数集 + 要关键帧：首包丢失或换分辨率后，对端也能尽快恢复画面
         scope.launch {
             while (isActive) {
                 delay(2000)
+                csdList.forEach { rtp.send(VideoMarker.CONFIG, it) }
                 requestKeyFrame()
             }
         }
@@ -171,8 +190,11 @@ class VideoCallSession(
 
         override fun onOutputFormatChanged(codec: MediaCodec, format: MediaFormat) {
             // 取出参数集 SPS/PPS 发给对端（对端据此初始化解码器）
-            format.getByteBuffer("csd-0")?.toBytes()?.let { rtp.send(VideoMarker.CONFIG, it) }
-            format.getByteBuffer("csd-1")?.toBytes()?.let { rtp.send(VideoMarker.CONFIG, it) }
+            val list = ArrayList<ByteArray>(2)
+            format.getByteBuffer("csd-0")?.toBytes()?.let { list += it }
+            format.getByteBuffer("csd-1")?.toBytes()?.let { list += it }
+            csdList = list
+            list.forEach { rtp.send(VideoMarker.CONFIG, it) }
         }
 
         override fun onError(codec: MediaCodec, e: MediaCodec.CodecException) {
@@ -331,7 +353,10 @@ class VideoCallSession(
 
     private val decCallback = object : MediaCodec.Callback() {
         override fun onInputBufferAvailable(codec: MediaCodec, idx: Int) {
-            // 输入由 onPacket() 主动 queueInputBuffer，这里无需处理
+            synchronized(inLock) {
+                freeInputs.addLast(idx)
+                drainLocked(codec)
+            }
         }
 
         override fun onOutputBufferAvailable(codec: MediaCodec, idx: Int, info: MediaCodec.BufferInfo) {
@@ -348,37 +373,49 @@ class VideoCallSession(
     private fun onPacket(marker: Int, payload: ByteArray) {
         when (marker) {
             VideoMarker.CONFIG -> {
-                pendingConfig.add(payload)
-                feedConfig()
+                // 同一个参数集会被周期性重发，去重后再排队
+                if (configQueue.none { it.contentEquals(payload) }) {
+                    configQueue.addLast(payload)
+                    while (configQueue.size > 4) configQueue.removeFirst()
+                }
             }
-            VideoMarker.IDR -> queueInput(payload, MediaCodec.BUFFER_FLAG_KEY_FRAME)
+            VideoMarker.IDR -> {
+                // 关键帧前补喂参数集：首包丢失/切换分辨率后解码器才能恢复
+                while (configQueue.isNotEmpty()) {
+                    queueInput(configQueue.removeFirst(), MediaCodec.BUFFER_FLAG_CODEC_CONFIG)
+                }
+                queueInput(payload, MediaCodec.BUFFER_FLAG_KEY_FRAME)
+            }
             else -> queueInput(payload, 0)
         }
     }
 
-    /** 参数集必须以 CODEC_CONFIG 标志喂入，且需在首帧之前。 */
-    private fun feedConfig() {
-        if (pendingConfig.isEmpty()) return
-        for (c in pendingConfig) {
-            queueInput(c, MediaCodec.BUFFER_FLAG_CODEC_CONFIG)
-        }
-        pendingConfig.clear()
-    }
-
+    /** 排队一帧，交给解码器的空闲输入缓冲（异步模式下只能 queueInputBuffer）。 */
     private fun queueInput(payload: ByteArray, flags: Int) {
         val d = decoder ?: return
-        val idx = d.dequeueInputBuffer(10_000)
-        if (idx < 0) return
-        val ib = d.getInputBuffer(idx) ?: return
-        ib.clear()
-        if (payload.size > ib.remaining()) {
-            // 单帧超过输入缓冲（弱网聚合/超大帧）时丢弃，避免 BufferOverflowException
-            Log.w(TAG, "视频帧过大丢弃 ${payload.size}")
-            d.queueInputBuffer(idx, 0, 0, 0, flags)
-            return
+        synchronized(inLock) {
+            // 解码跟不上时别无限堆积，否则画面延迟越拖越长
+            while (pendingFrames.size > 60) pendingFrames.removeFirst()
+            pendingFrames.addLast(DecFrame(payload, flags))
+            drainLocked(d)
         }
-        ib.put(payload)
-        runCatching { d.queueInputBuffer(idx, 0, payload.size, 0, flags) }
+    }
+
+    private fun drainLocked(codec: MediaCodec) {
+        while (freeInputs.isNotEmpty() && pendingFrames.isNotEmpty()) {
+            val idx = freeInputs.removeFirst()
+            val frame = pendingFrames.removeFirst()
+            val ib = codec.getInputBuffer(idx) ?: continue
+            ib.clear()
+            if (frame.data.size > ib.remaining()) {
+                // 单帧超过输入缓冲（超大帧）时丢弃，避免 BufferOverflowException
+                Log.w(TAG, "视频帧过大丢弃 ${frame.data.size}")
+                runCatching { codec.queueInputBuffer(idx, 0, 0, 0, frame.flags) }
+                continue
+            }
+            ib.put(frame.data)
+            runCatching { codec.queueInputBuffer(idx, 0, frame.data.size, 0, frame.flags) }
+        }
     }
 
     fun stop() {

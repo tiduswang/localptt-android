@@ -13,8 +13,13 @@ import com.example.localptt.net.DiscoveryListener
 import com.example.localptt.net.HostBeacon
 import com.example.localptt.net.UdpBus
 import com.example.localptt.net.WifiDirectManager
+import com.example.localptt.net.netGuard
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.asCoroutineDispatcher
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.SharedFlow
+import kotlinx.coroutines.launch
 
 /**
  * 进程内共享总线：MainActivity 建网后把各模块实例注册到这里，
@@ -92,14 +97,30 @@ object AppBus {
     /**
      * 房间完整名单（含主机和自己），两端由同一份 PeerList 渲染，保证状态一致。
      * 取「对端」请统一用 [others]，不要用 peers.firstOrNull()（可能取到自己）。
+     *
+     * ★ 用 CopyOnWriteArrayList：名单由网络线程整体替换、UI 线程同时遍历，
+     *   普通 ArrayList 在遍历时被改写会抛 ConcurrentModificationException
+     *   或让界面卡一下（游戏页尤其明显）。
      */
-    val peers: MutableList<Peer> = mutableListOf()
+    val peers: MutableList<Peer> = java.util.concurrent.CopyOnWriteArrayList()
 
     /** 名单里除自己以外的成员。 */
     val others: List<Peer> get() = peers.filter { it.id != myId }
 
     /** 是否已建网（有主机身份或客户端连接）。 */
     val isConnected: Boolean get() = server != null || client != null
+
+    /**
+     * 信令发送队列（单线程串行，保证消息顺序）。
+     * ★ 过去 [post] 直接在调用线程（往往是 UI 线程）里写 socket：
+     *   对端接收慢 / TCP 窗口满时 println 会阻塞，游戏按钮就会出现「点了半天没反应」。
+     *   现在只入队，真正的写操作在后台线程完成。
+     */
+    private val sendScope = CoroutineScope(
+        java.util.concurrent.Executors.newSingleThreadExecutor { r ->
+            Thread(r, "ptt-signal-send").apply { isDaemon = true }
+        }.asCoroutineDispatcher() + SupervisorJob() + netGuard
+    )
 
     /**
      * 释放并清空全部网络资源。
@@ -125,10 +146,13 @@ object AppBus {
         peers.clear()
     }
 
-    /** 发送一条信令：主机走 ControlServer，客户端走 ControlClient。 */
+    /** 发送一条信令：主机走 ControlServer，客户端走 ControlClient（后台串行发送，不卡 UI）。 */
     fun post(m: Msg) {
-        val c = client
-        if (c != null) runCatching { c.send(m) }
-        else runCatching { server?.send(m) }
+        sendScope.launch {
+            runCatching {
+                val c = client
+                if (c != null) c.send(m) else server?.send(m)
+            }
+        }
     }
 }

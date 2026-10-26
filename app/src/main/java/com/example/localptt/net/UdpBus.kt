@@ -28,6 +28,10 @@ class UdpBus(
     private val socket: DatagramSocket? = openUdpSocket(port) { rxPort = it }
     private val scope = netScope()
 
+    /** ★ 幂等保护：建房间和每个语音页都会调 startReceiving()，过去会在同一个 socket 上
+     *  开出多条 receive 循环互相抢包，丢包率随打开次数累加。现在只允许一条。 */
+    private val receiving = java.util.concurrent.atomic.AtomicBoolean(false)
+
     /** 收到的音频帧（来自某节点 + 序号 + 负载）。 */
     data class AudioFrame(val fromId: String, val seq: Int, val payload: ByteArray)
 
@@ -57,10 +61,14 @@ class UdpBus(
 
     fun startReceiving() = scope.launch {
         val s = socket ?: return@launch
+        if (!receiving.compareAndSet(false, true)) return@launch
+        // 语音帧很小但密集，接收缓冲加大，减少系统丢包
+        runCatching { s.receiveBufferSize = 256 * 1024 }
         val buf = ByteArray(1024)
         while (true) {
             val pkt = DatagramPacket(buf, buf.size)
-            runCatching { s.receive(pkt) }.onFailure { return@launch }
+            val ok = runCatching { s.receive(pkt) }.isSuccess
+            if (!ok) { receiving.set(false); return@launch }
             val n = pkt.length
             if (n <= 10) continue
             runCatching {

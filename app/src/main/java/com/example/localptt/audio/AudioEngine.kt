@@ -55,11 +55,19 @@ class AudioEngine(
     private val jitter = ConcurrentLinkedQueue<UdpBus.AudioFrame>()
 
     /** 播放增益（解码后放大）。调大可让对方/自己听到的声音更响。 */
-    @Volatile var playGain = 3.0f
-    /** 采集增益（编码前放大）。 */
-    @Volatile var recGain = 2.0f
+    @Volatile var playGain = 1.6f
+    /** 采集增益（编码前放大）。PCM 直通会保留原始电平，采集端不再叠加太多增益（配合硬件 AGC）。 */
+    @Volatile var recGain = 1.0f
     /** 是否走扬声器（false = 听筒）。 */
     @Volatile var speakerphone = true
+
+    /** 是否静音（不听对端）。静音时收到的语音帧直接丢弃。 */
+    @Volatile var playbackMuted = false
+        private set
+
+    /** 本机有没有可用的麦克风 / 扬声器（UI 用来提示，而不是静默失败）。 */
+    val canRecord: Boolean get() = rec != null
+    val canPlay: Boolean get() = track != null
 
     private val am: AudioManager? by lazy {
         runCatching { ctx.getSystemService(Context.AUDIO_SERVICE) as? AudioManager }.getOrNull()
@@ -73,9 +81,12 @@ class AudioEngine(
             runCatching { OpusCodec() }.onSuccess { return it }
                 .onFailure { Log.w("LocalPTT", "Opus 不可用：${it.message}") }
         }
-        val amr = runCatching { AmrCodec().takeIf { it.available() } }.getOrNull()
-        if (amr != null) return amr
-        Log.w("LocalPTT", "AMR-NB 不可用，降级为 PCM 直通（带宽约 128kbps）")
+        // ★ 关键修复（「语音对讲听不到对方」）：以前默认用 AMR-NB（MediaCodec 软件编解码），
+        //   两端设备的 AMR 支持情况不一定一致，且逐帧 dequeue 只有 10ms 超时，常常拿到空帧：
+        //   编码端静音、解码端解出空 PCM，表现就是完全听不到。
+        //   局域网/直连带宽完全够用，这里统一走 PCM 直通（8kHz 单声道约 128kbps），
+        //   任何机型行为一致，彻底消除编解码器差异。
+        Log.i("LocalPTT", "语音编码：PCM 直通（8kHz 单声道）")
         return RawCodec()
     }
 
@@ -134,12 +145,14 @@ class AudioEngine(
             .setSampleRate(sampleRate)
             .setChannelMask(AudioFormat.CHANNEL_OUT_MONO)
             .build()
-        val usage = if (speakerphone) AudioAttributes.USAGE_MEDIA
-        else AudioAttributes.USAGE_VOICE_COMMUNICATION
+        // ★ 固定使用「通话音轨」：与 MODE_IN_COMMUNICATION 匹配，音量走通话流，
+        //   过去扬声器模式用 USAGE_MEDIA、听筒模式用 USAGE_VOICE_COMMUNICATION，
+        //   两者与 AudioManager.mode 混搭时，部分机型会直接把播放静音。
         runCatching {
             AudioTrack.Builder()
                 .setAudioAttributes(
-                    AudioAttributes.Builder().setUsage(usage)
+                    AudioAttributes.Builder()
+                        .setUsage(AudioAttributes.USAGE_VOICE_COMMUNICATION)
                         .setContentType(AudioAttributes.CONTENT_TYPE_SPEECH).build()
                 )
                 .setAudioFormat(fmt)
@@ -149,20 +162,20 @@ class AudioEngine(
         }.onSuccess {
             if (it.state == AudioTrack.STATE_INITIALIZED) return it
             runCatching { it.release() }
-        }.onFailure { Log.w("LocalPTT", "AudioTrack usage $usage 创建失败：${it.message}") }
+        }.onFailure { Log.w("LocalPTT", "AudioTrack 创建失败：${it.message}") }
         return null
     }
 
-    /** 切换通信模式 + 扬声器：这是「能用扬声器外放」的关键。 */
+    /** 切到通话音量路由 + 扬声器/听筒：这是「能听到对方」的前提。 */
     private fun applyRouting() {
         val m = am ?: return
         runCatching {
             if (savedMode == null) { savedMode = m.mode; savedSpeaker = m.isSpeakerphoneOn }
-            m.mode = if (speakerphone) AudioManager.MODE_IN_COMMUNICATION else AudioManager.MODE_NORMAL
+            // 无论外放还是听筒都保持通话模式：AudioTrack 用的是通话音轨，只有在通话模式下才会真正出声
+            m.mode = AudioManager.MODE_IN_COMMUNICATION
             m.isSpeakerphoneOn = speakerphone
             // 通话流音量过低时抬到 70%，避免「开到最大还是很轻」
             runCatching { raiseStreamIfTooLow(AudioManager.STREAM_VOICE_CALL) }
-            runCatching { raiseStreamIfTooLow(AudioManager.STREAM_MUSIC) }
         }.onFailure { Log.w("LocalPTT", "音频路由设置失败：${it.message}") }
     }
 
@@ -185,15 +198,21 @@ class AudioEngine(
         }.onFailure { Log.w("LocalPTT", "AGC 不可用：${it.message}") }
     }
 
-    /** 切换扬声器/听筒（会重建播放通道）。 */
+    /** 切换扬声器/听筒（只改音频路由，不重建音轨，避免切换瞬间丢声音）。 */
     fun setSpeaker(on: Boolean) {
-        if (on == speakerphone && track != null) return
         speakerphone = on
-        runCatching { track?.stop() }
-        runCatching { track?.release() }
-        track = buildTrack()
         applyRouting()
-        if (talking || handsFree) runCatching { track?.play() }
+    }
+
+    /** 静音/取消静音（不听对端）。 */
+    fun setPlaybackMuted(muted: Boolean) {
+        playbackMuted = muted
+        if (muted) {
+            runCatching { track?.pause() }
+            jitter.clear()
+        } else {
+            runCatching { track?.play() }
+        }
     }
 
     /** 按住说话：开始采集并广播。 */
@@ -246,8 +265,10 @@ class AudioEngine(
     private suspend fun receiveLoop() {
         runCatching { track?.play() }
         for (f in bus.inbound) {
+            // 静音时不写入音轨，也不让抖动队列越积越多
+            if (playbackMuted) { jitter.clear(); continue }
             jitter.add(f)
-            // 缓冲 4 帧后再播，抗抖动；溢出则丢弃最旧帧，避免延迟累积
+            // 缓冲 2 帧后再播，抗抖动；溢出则丢弃最旧帧，避免延迟累积
             while (jitter.size > 8) jitter.poll()
             if (jitter.size < 2) continue
             val frame = jitter.poll() ?: continue

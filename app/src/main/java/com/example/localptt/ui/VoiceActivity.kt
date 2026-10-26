@@ -34,6 +34,11 @@ class VoiceActivity : AppCompatActivity() {
     private lateinit var tvTalkIcon: TextView
     private lateinit var tvSpeakerIcon: TextView
     private lateinit var tvSpeakerText: TextView
+    private lateinit var tvMuteIcon: TextView
+    private lateinit var tvMuteText: TextView
+
+    /** 是否静音（不听对方）。默认开声音。 */
+    private var muted = false
 
     /** 是否由对端同步关闭（避免回发 exit 造成双方来回关闭）。 */
     private var closedByRemote = false
@@ -48,6 +53,8 @@ class VoiceActivity : AppCompatActivity() {
         tvTalkIcon = findViewById(R.id.tvTalkIcon)
         tvSpeakerIcon = findViewById(R.id.tvSpeakerIcon)
         tvSpeakerText = findViewById(R.id.tvSpeakerText)
+        tvMuteIcon = findViewById(R.id.tvMuteIcon)
+        tvMuteText = findViewById(R.id.tvMuteText)
 
         findViewById<View>(R.id.btnBack).setOnClickListener { finish() }
 
@@ -57,6 +64,14 @@ class VoiceActivity : AppCompatActivity() {
             val on = !e.speakerphone
             e.setSpeaker(on)
             renderSpeaker(on)
+        }
+
+        // 手动打开/关闭「听到对方的声音」
+        findViewById<View>(R.id.btnMute).setOnClickListener {
+            muted = !muted
+            engine?.setPlaybackMuted(muted)
+            renderMute()
+            toast(if (muted) "已经把对方的声音关掉啦" else "又能听到对方说话啦")
         }
 
         val bus = AppBus.bus
@@ -106,7 +121,9 @@ class VoiceActivity : AppCompatActivity() {
                     tvTalkIcon.text = "🚫"
                     btnTalk.isEnabled = false
                 } else {
+                    it.setPlaybackMuted(muted)
                     renderSpeaker(it.speakerphone)
+                    renderMute()
                     tvHint.text = "按住上面的按钮说话"
                 }
             }
@@ -157,9 +174,18 @@ class VoiceActivity : AppCompatActivity() {
                     tvHint.text = "手机麦克风不好用了，换个手机试试"
                     tvTalkIcon.text = "🚫"
                     btnTalk.isEnabled = false
-                } else renderSpeaker(it.speakerphone)
+                } else {
+                    it.setPlaybackMuted(muted)
+                    renderSpeaker(it.speakerphone)
+                    renderMute()
+                }
             }
         }
+    }
+
+    private fun renderMute() {
+        tvMuteIcon.text = if (muted) "🔇" else "🎧"
+        tvMuteText.text = if (muted) "听对方：关" else "听对方：开"
     }
 
     private fun toast(s: String) = Toast.makeText(this, s, Toast.LENGTH_SHORT).show()
