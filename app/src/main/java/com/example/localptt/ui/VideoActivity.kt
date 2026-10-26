@@ -3,6 +3,7 @@ package com.example.localptt.ui
 import android.Manifest
 import android.content.pm.ActivityInfo
 import android.content.pm.PackageManager
+import android.graphics.Matrix
 import android.graphics.SurfaceTexture
 import android.os.Bundle
 import android.view.Gravity
@@ -86,6 +87,14 @@ class VideoActivity : AppCompatActivity() {
     /** 麦克风是否打开（关掉后不把声音发给对方）。 */
     private var micOn = true
 
+    // ---------- 相机画面方向（本地画中画用） ----------
+
+    /** 相机 sensor 方向（多数机型前置是 270°）。 */
+    private var camSensor = 90
+
+    /** 是否前置相机（前置要镜像显示，像个镜子）。 */
+    private var camFront = true
+
     private val prefs get() = getSharedPreferences("localptt", MODE_PRIVATE)
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -106,6 +115,7 @@ class VideoActivity : AppCompatActivity() {
 
         videoRotation = prefs.getInt("videoRotation", 0)
         manualLandscape = prefs.getBoolean("videoLandscape", false)
+        readCameraInfo()
 
         findViewById<View>(R.id.btnVideoBack).setOnClickListener { finish() }
         findViewById<View>(R.id.btnInvite).setOnClickListener { inviteFirstPeer() }
@@ -119,9 +129,13 @@ class VideoActivity : AppCompatActivity() {
         localPreview.surfaceTextureListener = object : TextureView.SurfaceTextureListener {
             override fun onSurfaceTextureAvailable(st: SurfaceTexture, w: Int, h: Int) {
                 localReady = true
+                applyLocalPreviewTransform()
                 tryAttach()
             }
-            override fun onSurfaceTextureSizeChanged(st: SurfaceTexture, w: Int, h: Int) {}
+            override fun onSurfaceTextureSizeChanged(st: SurfaceTexture, w: Int, h: Int) {
+                // 相机可能把预览缓冲改成横画幅的尺寸：变换矩阵要跟着重算
+                applyLocalPreviewTransform()
+            }
             override fun onSurfaceTextureDestroyed(st: SurfaceTexture): Boolean {
                 localReady = false
                 return true
@@ -129,6 +143,11 @@ class VideoActivity : AppCompatActivity() {
             override fun onSurfaceTextureUpdated(st: SurfaceTexture) {}
         }
         if (localPreview.isAvailable) localReady = true
+
+        // 小窗尺寸变化（换横竖比例 / 进出全屏）后重新摆正自己的画面
+        localPreview.addOnLayoutChangeListener { _, _, _, _, _, _, _, _, _ ->
+            applyLocalPreviewTransform()
+        }
 
         remoteView.surfaceTextureListener = object : TextureView.SurfaceTextureListener {
             override fun onSurfaceTextureAvailable(st: SurfaceTexture, w: Int, h: Int) {
@@ -234,18 +253,85 @@ class VideoActivity : AppCompatActivity() {
 
     /** 把旋转与「补齐尺寸」同时应用到两块画面：转 90/270 时宽高交换，否则会被裁掉。 */
     private fun applyRotation() {
+        // 远端画面整体旋转（对端发来的原样画面），自己小窗则按 sensor 方向单独摆正
         remoteView.rotation = videoRotation.toFloat()
-        localPreview.rotation = videoRotation.toFloat()
         btnRotate.text = "↻ 转画面 ${videoRotation}°"
 
-        val landscapePic = videoRotation % 180 != 0
-        // 自己的小窗：转成横的画面时把小窗也改成横向比例，避免被裁
+        // 自己的小窗：始终按相机 sensor 方向摆正（「转画面」只管对方画面，不叠加到小窗上）
+        val landscapePic = sensorCorrection() % 180 == 0
         val lp = localCard.layoutParams as FrameLayout.LayoutParams
         lp.width = dp(if (landscapePic) 148 else 104)
         lp.height = dp(if (landscapePic) 104 else 148)
         lp.gravity = Gravity.TOP or Gravity.START
         localCard.layoutParams = lp
+        applyLocalPreviewTransform()
         fitRotatedRemote()
+    }
+
+    /** 读取相机方向信息（挑相机的逻辑与 [VideoCallSession] 保持一致）。 */
+    private fun readCameraInfo() {
+        val info = VideoCallSession.pickCamera(this) ?: return
+        camSensor = info.sensorOrientation
+        camFront = info.front
+    }
+
+    /** 当前屏幕方向（0/90/180/270）。 */
+    private fun displayRotationDegrees(): Int {
+        @Suppress("DEPRECATION")   // minSdk 24：display.rotation 要 API 30 才有
+        val rot = if (android.os.Build.VERSION.SDK_INT >= 30) {
+            display?.rotation ?: android.view.Surface.ROTATION_0
+        } else {
+            windowManager.defaultDisplay.rotation
+        }
+        return when (rot) {
+            android.view.Surface.ROTATION_90 -> 90
+            android.view.Surface.ROTATION_180 -> 180
+            android.view.Surface.ROTATION_270 -> 270
+            else -> 0
+        }
+    }
+
+    /**
+     * 相机 sensor 方向换算成「显示时需要转多少度」：
+     *  - 后置：sensor 角度 - 屏幕旋转；
+     *  - 前置：sensor 角度 + 屏幕旋转，再取反（前置画面是镜像的，Camera1 时代的经典公式）。
+     * 例：多数手机前置 sensor=270、竖屏 → 90°，转 90° 人就是正的。
+     */
+    private fun sensorCorrection(): Int {
+        val deg = displayRotationDegrees()
+        return if (camFront) (360 - (camSensor + deg) % 360) % 360
+        else (camSensor - deg + 360) % 360
+    }
+
+    /**
+     * ★ 修复「画中画里人一直是横着的」：
+     * Camera2 输出的是 **sensor 原始画幅**（多数机型是横的），直接塞进竖的小窗里人就横躺了。
+     * 原来只给整块 TextureView 设 rotation，而 videoRotation 默认 0，所以等于完全没纠正。
+     * 这里用 TextureView 的**显示变换矩阵**按 sensor 方向旋转 + 等比铺满小窗，
+     * 只影响本地预览，不影响编码发送的那一路（预览和编码是两个独立的 Surface）。
+     */
+    private fun applyLocalPreviewTransform() {
+        val w = localPreview.width
+        val h = localPreview.height
+        if (w <= 0 || h <= 0 || !localPreview.isAvailable) return
+        val rotation = sensorCorrection()
+
+        // 相机缓冲按 4:3 横画幅处理（编码候选也是 640x480 / 320x240）
+        val bw = 4f
+        val bh = 3f
+        val rw = if (rotation % 180 == 0) bw else bh
+        val rh = if (rotation % 180 == 0) bh else bw
+        val scale = maxOf(w / rw, h / rh)      // 等比铺满小窗，多余部分居中裁掉
+
+        val m = Matrix()
+        // TextureView 默认把缓冲「拉伸铺满」视图，先抵消这个拉伸，再按真实比例旋转缩放
+        m.postScale(bw / w, bh / h)
+        m.postTranslate(-bw / 2f, -bh / 2f)
+        m.postScale(scale, scale)
+        m.postRotate(rotation.toFloat())
+        m.postTranslate(w / 2f, h / 2f)
+        if (camFront) m.postScale(-1f, 1f, w / 2f, h / 2f)   // 前置像照镜子一样左右翻
+        localPreview.setTransform(m)
     }
 
     /** 远端画面旋转 90/270 时要按舞台尺寸交换宽高，并居中，才能铺满不被裁。 */

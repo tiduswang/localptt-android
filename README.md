@@ -9,7 +9,7 @@
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 [![Min SDK](https://img.shields.io/badge/minSdk-24_(Android_7.0)-orange.svg)](app/build.gradle.kts)
 [![Build](https://github.com/tiduswang/localptt-android/actions/workflows/build.yml/badge.svg)](https://github.com/tiduswang/localptt-android/actions/workflows/build.yml)
-[![Version](https://img.shields.io/badge/version-1.3.3-brightgreen.svg)](CHANGELOG.md)
+[![Version](https://img.shields.io/badge/version-1.3.4-brightgreen.svg)](CHANGELOG.md)
 
 ## ✨ 功能特性
 
@@ -45,7 +45,7 @@ gradlew.bat assembleDebug      # Windows
 > 产物：`app/build/outputs/apk/debug/app-debug.apk`（约 10 MB，包名 `com.example.localptt`）。
 
 不想自己编译？直接下载现成的安装包：
-**[localptt-1.3.3-debug.apk](https://github.com/tiduswang/localptt-android/releases/download/v1.3.3/localptt-1.3.3-debug.apk)**（debug 签名，仅用于测试）。
+**[localptt-1.3.4-debug.apk](https://github.com/tiduswang/localptt-android/releases/download/v1.3.4/localptt-1.3.4-debug.apk)**（debug 签名，仅用于测试）。
 
 ### 3. 真机运行与验收
 语音对讲 / 视频 / Wi-Fi Direct 需**真机**（模拟器不支持 P2P 与摄像头）。

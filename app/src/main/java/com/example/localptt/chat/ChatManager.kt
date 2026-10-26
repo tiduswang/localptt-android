@@ -80,9 +80,14 @@ class ChatManager(private val ctx: Context) {
         return emit(ChatMsg(myId(), to, uid(), "photo", mediaUrl(f), now()))
     }
 
-    /** 开始录制语音消息（无录音权限或设备不支持时静默失败，不崩溃）。 */
-    fun startVoice() {
-        runCatching {
+    /**
+     * 开始录制语音消息。
+     * @return true = 真的开始录了；false = 没录上（最常见是没给麦克风权限，
+     *         MediaRecorder.prepare() 会直接抛异常）。UI 必须据此提示，不能再假装成功。
+     */
+    fun startVoice(): Boolean {
+        cancelVoice()   // 上一次没收干净（手指滑走 / 异常）时先清理，避免两路录音抢麦克风
+        return runCatching {
             // 文件名带随机串：多台设备同一毫秒录音也不会撞名，接收方缓存不会被覆盖
             voiceFile = File(voiceDir, "voice_${System.currentTimeMillis()}_${uid()}.m4a")
             @Suppress("DEPRECATION")     // MediaRecorder() 在 API 31 弃用，minSdk 24 需保留
@@ -95,23 +100,38 @@ class ChatManager(private val ctx: Context) {
             r.prepare()
             r.start()
             voiceStartAt = System.currentTimeMillis()
+            true
         }.onFailure {
             Log.w("LocalPTT", "语音消息录制失败：${it.message}")
             runCatching { recorder?.release() }
             recorder = null
-        }
+            voiceFile?.let { f -> runCatching { f.delete() } }
+            voiceFile = null
+        }.getOrDefault(false)
     }
 
-    /** 停止录制并发送（返回时长 ms；0 表示录音失败）。 */
+    /** 停止录制并发送；@return 时长 ms，**0 = 没发出去**（按得太短 / 文件为空 / 没建网）。 */
     fun stopVoiceAndSend(to: String): Long {
-        runCatching { recorder?.stop() }.onFailure { Log.w("LocalPTT", "停止录音失败：${it.message}") }
-        runCatching { recorder?.release() }
+        val r = recorder
         recorder = null
+        var stopOk = true
+        if (r != null) {
+            stopOk = runCatching { r.stop() }
+                .onFailure { e -> Log.w("LocalPTT", "停止录音失败（多半是按得太短）：${e.message}") }
+                .isSuccess
+        }
+        runCatching { r?.release() }
         val dur = (System.currentTimeMillis() - voiceStartAt).coerceAtLeast(0)
         val f = voiceFile ?: return 0L
         voiceFile = null
-        if (!f.exists() || f.length() <= 0) return 0L
-        return if (emit(VoiceMeta(myId(), to, uid(), dur, mediaUrl(f)))) dur else 0L
+        // 停不下来 / 文件是空的：删掉半截文件，返回 0 让界面明确提示
+        if (!stopOk || !f.exists() || f.length() <= 0) {
+            runCatching { f.delete() }
+            return 0L
+        }
+        if (emit(VoiceMeta(myId(), to, uid(), dur, mediaUrl(f)))) return dur
+        runCatching { f.delete() }
+        return 0L
     }
 
     fun cancelVoice() {

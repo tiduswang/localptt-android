@@ -1,10 +1,12 @@
 package com.example.localptt.ui
 
+import android.Manifest
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.media.MediaPlayer
 import android.net.Uri
 import android.os.Bundle
+import android.content.pm.PackageManager
 import android.view.Gravity
 import android.view.LayoutInflater
 import android.view.MotionEvent
@@ -19,6 +21,8 @@ import android.widget.Toast
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AlertDialog
 import androidx.appcompat.app.AppCompatActivity
+import androidx.core.app.ActivityCompat
+import androidx.core.content.ContextCompat
 import androidx.lifecycle.lifecycleScope
 import androidx.recyclerview.widget.LinearLayoutManager
 import androidx.recyclerview.widget.RecyclerView
@@ -76,6 +80,12 @@ class ChatActivity : AppCompatActivity() {
     /** 对端是否也在这个功能页里出现过。 */
     private var peerWasHere = false
 
+    /** 本次按压是否真的在录音（录音没启动时松手不能报「发出去啦」）。 */
+    private var voiceRecording = false
+
+    /** 本次按压开始的时间，用于判断「按得太短」。 */
+    private var voiceDownAt = 0L
+
     private val pickPhoto =
         registerForActivityResult(ActivityResultContracts.GetContent()) { uri: Uri? ->
             if (uri != null) sendPhoto(uri)
@@ -112,20 +122,41 @@ class ChatActivity : AppCompatActivity() {
         btnVoice.setOnTouchListener { _, ev ->
             when (ev.action) {
                 MotionEvent.ACTION_DOWN -> {
-                    chat?.startVoice()
-                    tvVoiceIcon.text = "🔴"
-                    tvVoiceLabel.text = "松手发送"
+                    // ★ 「语音发送不成功」的根因：微聊页过去**从没申请过 RECORD_AUDIO**
+                    //   （只有语音页/视频页申请）。没进过那两页时 MediaRecorder.prepare() 直接抛异常，
+                    //   消息被静默吞掉。这里先确认权限，再开始录。
+                    if (!hasMic()) {
+                        ActivityCompat.requestPermissions(
+                            this, arrayOf(Manifest.permission.RECORD_AUDIO), REQ_MIC
+                        )
+                        toast("🎤 先允许「麦克风」，再按住说话哦")
+                    } else {
+                        voiceDownAt = System.currentTimeMillis()
+                        voiceRecording = chat?.startVoice() == true
+                        tvVoiceIcon.text = if (voiceRecording) "🔴" else "🎤"
+                        tvVoiceLabel.text = if (voiceRecording) "松手发送" else "按住说话"
+                        if (!voiceRecording) toast("🎤 麦克风打不开，检查一下录音权限再试")
+                    }
                     true
                 }
                 MotionEvent.ACTION_UP -> {
-                    send { chat?.stopVoiceAndSend(peerId) }
+                    val held = System.currentTimeMillis() - voiceDownAt
+                    val recording = voiceRecording
+                    voiceRecording = false
                     tvVoiceIcon.text = "🎤"
                     tvVoiceLabel.text = "按住说话"
-                    toast("📤 语音发出去啦")
+                    if (recording) {
+                        if (held < MIN_VOICE_MS) {
+                            // 太短的录音 stop() 会抛异常，文件也不完整，直接取消并提示
+                            chat?.cancelVoice()
+                            toast("按住久一点（1 秒以上）再松手哦")
+                        } else sendVoice()
+                    }
                     true
                 }
                 MotionEvent.ACTION_CANCEL -> {
                     // 手指滑走 = 取消，不发送
+                    voiceRecording = false
                     chat?.cancelVoice()
                     tvVoiceIcon.text = "🎤"
                     tvVoiceLabel.text = "按住说话"
@@ -180,6 +211,32 @@ class ChatActivity : AppCompatActivity() {
             return false
         }
         return runCatching { block() }.isSuccess
+    }
+
+    /** 语音消息松手发送：返回 0 表示真的没发出去（按太短 / 录音失败 / 没建网），必须提示。 */
+    private fun sendVoice() {
+        if (AppBus.client == null && AppBus.server == null) {
+            chat?.cancelVoice()
+            toast("还没连上小伙伴，先回首页开房间吧")
+            return
+        }
+        val sent = runCatching { chat?.stopVoiceAndSend(peerId) ?: 0L }.getOrDefault(0L)
+        toast(if (sent > 0) "📤 语音发出去啦" else "😢 这条语音没录上，再按住说一次吧")
+    }
+
+    private fun hasMic(): Boolean =
+        ContextCompat.checkSelfPermission(this, Manifest.permission.RECORD_AUDIO) ==
+            PackageManager.PERMISSION_GRANTED
+
+    override fun onRequestPermissionsResult(
+        requestCode: Int,
+        permissions: Array<out String>,
+        grantResults: IntArray
+    ) {
+        super.onRequestPermissionsResult(requestCode, permissions, grantResults)
+        if (requestCode != REQ_MIC) return
+        val ok = grantResults.firstOrNull() == PackageManager.PERMISSION_GRANTED
+        toast(if (ok) "🎤 麦克风准备好了，按住说话试试" else "没有麦克风权限就发不了语音哦")
     }
 
     /** 照片压缩 + 发送都在后台做，避免大图解码卡住界面。 */
@@ -310,6 +367,14 @@ class ChatActivity : AppCompatActivity() {
         if (!closedByRemote) {
             runCatching { AppBus.postFeatureExit(Feature.CHAT) }
         }
+    }
+
+    private companion object {
+        /** 申请录音权限的请求码。 */
+        const val REQ_MIC = 2003
+
+        /** 太短的录音 stop() 会失败、文件也不完整，直接取消并提示（1 秒左右比较稳）。 */
+        const val MIN_VOICE_MS = 800L
     }
 
     private fun toast(s: String) = Toast.makeText(this, s, Toast.LENGTH_SHORT).show()

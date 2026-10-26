@@ -62,7 +62,35 @@ class VideoCallSession(
             intArrayOf(640, 480, 15),
             intArrayOf(320, 240, 15)
         )
+
+        /**
+         * 挑出对讲要用的相机（优先前置）并读出它的 **sensor 方向**。
+         *
+         * Activity 在建会话之前就要用它把本地画中画摆正：Camera2 输出的是 sensor 原始画幅
+         * （多数机型是横的），直接塞进竖的小窗里，人就横着了。
+         */
+        fun pickCamera(ctx: Context): CamInfo? {
+            val cm = ctx.getSystemService(Context.CAMERA_SERVICE) as? CameraManager ?: return null
+            val ids = runCatching { cm.cameraIdList }.getOrDefault(emptyArray())
+            var fallback: CamInfo? = null
+            for (id in ids) {
+                val ch = runCatching { cm.getCameraCharacteristics(id) }.getOrNull() ?: continue
+                val front = ch.get(CameraCharacteristics.LENS_FACING) ==
+                    CameraCharacteristics.LENS_FACING_FRONT
+                val info = CamInfo(
+                    id = id,
+                    sensorOrientation = ch.get(CameraCharacteristics.SENSOR_ORIENTATION) ?: 90,
+                    front = front
+                )
+                if (front) return info       // 对讲优先前置：孩子看的是屏幕这边
+                if (fallback == null) fallback = info
+            }
+            return fallback
+        }
     }
+
+    /** 相机标识 + 画面方向（sensor 角度）+ 是否前置。 */
+    data class CamInfo(val id: String, val sensorOrientation: Int, val front: Boolean)
 
     private val rtp = RtpSocket(peerIp, port)
     private val scope = netScope()
@@ -219,7 +247,7 @@ class VideoCallSession(
             onError?.invoke("这个手机没有相机")
             return
         }
-        val camId = pickFrontCameraId(cm) ?: run {
+        val camId = pickCamera(ctx)?.id ?: run {
             Log.e(TAG, "no camera")
             onError?.invoke("找不到可用的相机")
             return
@@ -247,21 +275,6 @@ class VideoCallSession(
             Log.e(TAG, "openCamera failed", it)
             onError?.invoke("相机打不开：${it.message}")
         }
-    }
-
-    /**
-     * 优先**前置**摄像头：对讲场景下孩子看的是屏幕这边，用前置才能拍到自己。
-     * 没有前置时退回任意一颗（后置）。
-     */
-    private fun pickFrontCameraId(cm: CameraManager): String? {
-        val ids = runCatching { cm.cameraIdList }.getOrDefault(emptyArray())
-        for (id in ids) {
-            val ch = runCatching { cm.getCameraCharacteristics(id) }.getOrNull() ?: continue
-            if (ch.get(CameraCharacteristics.LENS_FACING) ==
-                CameraCharacteristics.LENS_FACING_FRONT
-            ) return id
-        }
-        return ids.firstOrNull()
     }
 
     /**
