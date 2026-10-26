@@ -44,6 +44,9 @@ gradlew.bat assembleDebug      # Windows
 > 仓库已自带 `gradlew` / `gradlew.bat` / `gradle/wrapper/`，首次运行会自动下载 Gradle 8.5，无需本地预装。
 > 产物：`app/build/outputs/apk/debug/app-debug.apk`（约 10 MB，包名 `com.example.localptt`）。
 
+不想自己编译？直接下载现成的安装包：
+**[localptt-1.2.0-debug.apk](https://github.com/tiduswang/localptt-android/releases/download/v1.2.0/localptt-1.2.0-debug.apk)**（debug 签名，仅用于测试）。
+
 ### 3. 真机运行与验收
 语音对讲 / 视频 / Wi-Fi Direct 需**真机**（模拟器不支持 P2P 与摄像头）。
 建议准备 **2 台及以上** Android 7.0+ 手机。
