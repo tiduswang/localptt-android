@@ -574,7 +574,7 @@ class MainActivity : AppCompatActivity() {
     private suspend fun discoverP2pDevices(): List<WifiP2pDevice>? {
         val mgr = p2p ?: runCatching { WifiDirectManager(this) }.getOrNull() ?: return null
         p2p = mgr
-        return suspendCancellableCoroutine { cont ->
+        return suspendCancellableCoroutine<List<WifiP2pDevice>?> { cont ->
             var resumed = false
             fun done(list: List<WifiP2pDevice>?) {
                 if (!resumed) { resumed = true; if (cont.isActive) cont.resume(list) }

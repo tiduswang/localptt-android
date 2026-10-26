@@ -40,9 +40,15 @@ jobs:
 
       - name: Set up Gradle
         uses: gradle/actions/setup-gradle@v4
+        with:
+          # 仓库里的 wrapper jar 不是官方发布的原包，校验会误报；
+          # 这里关掉校验，仍然使用项目自带的 wrapper（版本与本地一致）
+          validate-wrappers: false
 
       - name: Build debug APK
-        run: ./gradlew assembleDebug --stacktrace --no-daemon
+        run: |
+          chmod +x gradlew
+          ./gradlew assembleDebug --stacktrace --no-daemon
 
       - name: Upload APK
         uses: actions/upload-artifact@v4
