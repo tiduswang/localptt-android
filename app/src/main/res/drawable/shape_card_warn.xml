@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Wi-Fi 提示条底色：淡橙底 + 橙描边，警示但不刺眼（儿童配色） -->
+<shape xmlns:android="http://schemas.android.com/apk/res/android" android:shape="rectangle">
+    <solid android:color="#FFEFD6" />
+    <stroke android:width="2dp" android:color="@color/c_orange_dark" />
+    <corners android:radius="20dp" />
+</shape>
