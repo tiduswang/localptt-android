@@ -4,7 +4,6 @@ import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
-import android.net.MacAddress
 import android.net.wifi.p2p.WifiP2pConfig
 import android.net.wifi.p2p.WifiP2pDevice
 import android.net.wifi.p2p.WifiP2pDeviceList
@@ -46,13 +45,23 @@ class WifiDirectManager(private val ctx: Context) {
     /**
      * 把本机在「Wi-Fi 直连」列表里的名字改成 `PTT-昵称`，方便小伙伴认出来。
      * 仅 Android 10（API 29）及以上支持；旧系统只能显示手机型号。
+     *
+     * 用反射调用：`setDeviceName` 在部分 SDK 版本上不可直接引用，
+     * 直接调用会导致编译期 unresolved；这里失败就静默跳过（只是个易用性增强）。
      */
     fun setDeviceName(name: String) {
         if (Build.VERSION.SDK_INT < 29) return
         val m = mgr ?: return
         val c = channel ?: return
-        runCatching { m.setDeviceName(c, name.take(32), null) }
-            .onFailure { Log.w("LocalPTT", "setDeviceName 失败：${it.message}") }
+        runCatching {
+            val mth = WifiP2pManager::class.java.getMethod(
+                "setDeviceName",
+                WifiP2pManager.Channel::class.java,
+                String::class.java,
+                WifiP2pManager.ActionListener::class.java
+            )
+            mth.invoke(m, c, name.take(32), null)
+        }.onFailure { Log.i("LocalPTT", "setDeviceName 不可用：${it.message}") }
     }
 
     /** 建组（作为主机/GO）。成功后通过回调拿到 GO 信息。 */
@@ -99,19 +108,13 @@ class WifiDirectManager(private val ctx: Context) {
         val m: WifiP2pManager? = mgr
         val c: WifiP2pManager.Channel? = channel
         if (m == null || c == null) { onResult(false); return }
-        val config = if (Build.VERSION.SDK_INT >= 29) {
-            WifiP2pConfig.Builder()
-                .setDeviceAddress(MacAddress.fromString(goDevice.deviceAddress))
-                .setGroupOperatingBand(WifiP2pConfig.GROUP_OWNER_BAND_2GHZ) // 强制 2.4GHz
-                // 0 = 尽量让对方（开房间的一方）当组长，自己以客户端身份加入
-                .setGroupOwnerIntent(0)
-                .build()
-        } else {
-            @Suppress("DEPRECATION")
-            WifiP2pConfig().apply {
-                deviceAddress = goDevice.deviceAddress
-                groupOwnerIntent = 0
-            }
+        // 统一用兼容构造器：deviceAddress + groupOwnerIntent = 0（尽量让对方当组长）。
+        // 新版 Builder 的「强制 2.4GHz」在部分 SDK 上无法直接引用（编译期 unresolved），
+        // 而带外频段并非必需，这里就走全版本通用写法，避免为了一个可选项编译不过。
+        @Suppress("DEPRECATION")
+        val config = WifiP2pConfig().apply {
+            deviceAddress = goDevice.deviceAddress
+            groupOwnerIntent = 0
         }
         runCatching {
             m.connect(c, config, object : WifiP2pManager.ActionListener {
