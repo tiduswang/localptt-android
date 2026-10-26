@@ -1,0 +1,22 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- 背景 / 文本 -->
+    <color name="kids_bg">#FFF7EC</color>
+    <color name="kids_card">#FFFFFF</color>
+    <color name="kids_cream">#FFF0D2</color>
+    <color name="kids_text">#4A3728</color>
+    <color name="kids_text_sub">#9A8874</color>
+
+    <!-- 糖果色板 -->
+    <color name="c_orange">#FFA94D</color>
+    <color name="c_orange_dark">#F08A24</color>
+    <color name="c_pink">#FF8FB1</color>
+    <color name="c_blue">#5CC8F5</color>
+    <color name="c_green">#6FD6A3</color>
+    <color name="c_purple">#B48CF7</color>
+    <color name="c_yellow">#FFD166</color>
+    <color name="c_red">#FF7A7A</color>
+
+    <!-- 视频画面底色 -->
+    <color name="kids_screen">#3A3355</color>
+</resources>
