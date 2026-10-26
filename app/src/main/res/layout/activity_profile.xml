@@ -1,0 +1,170 @@
+<?xml version="1.0" encoding="utf-8"?>
+<ScrollView xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:fillViewport="true"
+    android:background="@color/kids_bg">
+
+    <LinearLayout
+        android:orientation="vertical"
+        android:padding="16dp"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content">
+
+        <LinearLayout
+            android:orientation="horizontal"
+            android:gravity="center_vertical"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content">
+
+            <FrameLayout
+                android:id="@+id/btnProfileBack"
+                android:clickable="true"
+                android:focusable="true"
+                android:foreground="@drawable/ripple_dark"
+                android:background="@drawable/shape_circle_white"
+                android:layout_width="52dp"
+                android:layout_height="52dp">
+
+                <TextView
+                    android:text="🔙"
+                    android:textSize="24sp"
+                    android:layout_gravity="center"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content" />
+            </FrameLayout>
+
+            <TextView
+                android:text="🎨 我的名片"
+                android:textSize="20sp"
+                android:textStyle="bold"
+                android:textColor="@color/kids_text"
+                android:layout_marginStart="12dp"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content" />
+        </LinearLayout>
+
+        <!-- 当前形象预览 -->
+        <FrameLayout
+            android:layout_marginTop="18dp"
+            android:background="@drawable/shape_card_white"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content">
+
+            <LinearLayout
+                android:orientation="vertical"
+                android:gravity="center"
+                android:padding="18dp"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content">
+
+                <FrameLayout
+                    android:background="@drawable/shape_circle_cream"
+                    android:layout_width="112dp"
+                    android:layout_height="112dp">
+
+                    <ImageView
+                        android:id="@+id/ivBigAvatar"
+                        android:src="@drawable/av_bear"
+                        android:layout_gravity="center"
+                        android:layout_width="96dp"
+                        android:layout_height="96dp" />
+                </FrameLayout>
+
+                <TextView
+                    android:id="@+id/tvBigName"
+                    android:text="小朋友"
+                    android:textSize="20sp"
+                    android:textStyle="bold"
+                    android:textColor="@color/kids_text"
+                    android:layout_marginTop="10dp"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content" />
+
+                <TextView
+                    android:text="这就是小伙伴看到的样子"
+                    android:textSize="12sp"
+                    android:textColor="@color/kids_text_sub"
+                    android:layout_marginTop="2dp"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content" />
+            </LinearLayout>
+        </FrameLayout>
+
+        <TextView
+            android:text="✏️ 我的名字"
+            android:textSize="16sp"
+            android:textStyle="bold"
+            android:textColor="@color/kids_text"
+            android:layout_marginTop="20dp"
+            android:layout_marginBottom="8dp"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content" />
+
+        <EditText
+            android:id="@+id/etNick"
+            android:hint="给自己起个名字"
+            android:textSize="16sp"
+            android:maxLength="12"
+            android:inputType="text"
+            android:textColorHint="@color/kids_text_sub"
+            android:textColor="@color/kids_text"
+            android:background="@drawable/shape_input"
+            android:paddingHorizontal="16dp"
+            android:paddingVertical="12dp"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content" />
+
+        <TextView
+            android:text="🐻 选一个头像"
+            android:textSize="16sp"
+            android:textStyle="bold"
+            android:textColor="@color/kids_text"
+            android:layout_marginTop="20dp"
+            android:layout_marginBottom="8dp"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content" />
+
+        <GridView
+            android:id="@+id/gvAvatars"
+            android:numColumns="3"
+            android:verticalSpacing="10dp"
+            android:horizontalSpacing="10dp"
+            android:stretchMode="columnWidth"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content" />
+
+        <FrameLayout
+            android:id="@+id/btnSaveProfile"
+            android:clickable="true"
+            android:focusable="true"
+            android:foreground="@drawable/ripple_light"
+            android:background="@drawable/shape_pill_pink"
+            android:layout_marginTop="22dp"
+            android:layout_width="match_parent"
+            android:layout_height="60dp">
+
+            <LinearLayout
+                android:orientation="horizontal"
+                android:gravity="center"
+                android:layout_width="match_parent"
+                android:layout_height="match_parent">
+
+                <TextView
+                    android:text="✅"
+                    android:textSize="24sp"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content" />
+
+                <TextView
+                    android:text="保存"
+                    android:textSize="18sp"
+                    android:textStyle="bold"
+                    android:textColor="#FFFFFF"
+                    android:layout_marginStart="10dp"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content" />
+            </LinearLayout>
+        </FrameLayout>
+    </LinearLayout>
+</ScrollView>
