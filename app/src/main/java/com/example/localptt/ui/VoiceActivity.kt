@@ -41,6 +41,9 @@ class VoiceActivity : AppCompatActivity() {
     /** 是否由对端同步关闭（避免回发 exit 造成双方来回关闭）。 */
     private var closedByRemote = false
 
+    /** 对端是否也在这个功能页里出现过（用于判断「对端回了首页」是否该跟着退出）。 */
+    private var peerWasHere = false
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         setContentView(R.layout.activity_voice)
@@ -96,15 +99,28 @@ class VoiceActivity : AppCompatActivity() {
             false
         }
 
-        // 对端退出本功能 → 我也退出
+        // 对端退出本功能 → 我也退出。三种情况：
+        //  ① 对端明确发 exit；② 对端进了别的功能；③ 对端也来过这个页面、心跳显示已回首页。
+        //  ★ 不能只凭「对端现在在首页」就退出：我刚打开页面时对端还没收到 enter，那是正常暂态。
         lifecycleScope.launch {
             AppBus.featureEvents.collect { s ->
-                if (s.feature == Feature.VOICE && s.action == Feature.EXIT) {
+                if (s.from == AppBus.myId) return@collect
+                if (s.feature == Feature.VOICE && s.action != Feature.EXIT) peerWasHere = true
+                val explicitExit = s.action == Feature.EXIT && s.feature == Feature.VOICE
+                val peerEnteredOther = s.action == Feature.ENTER && s.feature != Feature.VOICE
+                val peerWentHome = s.action == Feature.STATE && s.feature.isBlank() && peerWasHere
+                if (explicitExit || peerEnteredOther || peerWentHome) {
                     closedByRemote = true
                     finish()
                 }
             }
         }
+    }
+
+    override fun onResume() {
+        super.onResume()
+        // 回到前台时重新声明「我在语音页」，这样从别的页面返回时状态也不会错
+        AppBus.activeFeature = Feature.VOICE
     }
 
     override fun onStart() {

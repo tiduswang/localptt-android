@@ -144,8 +144,11 @@ data class Bye(
 /**
  * 功能同步：一台设备进入/退出某个功能页，房间内其他设备同步进入/退出。
  *
- * feature ∈ {voice, video, chat, game}
- * action  ∈ {enter, exit}
+ * feature ∈ {voice, video, chat, game}（action = state 时为空串，表示「我在首页」）
+ * action  ∈ {enter, exit, state}
+ *
+ * state 是**状态心跳**：每 2 秒广播一次「我现在在哪个功能页」。
+ * enter/exit 是事件，丢包或重连后无法补；state 让两端自动对齐（见 AppBus.startFeatureStateSync）。
  */
 @Serializable @SerialName("feature")
 data class FeatureSync(
@@ -162,4 +165,5 @@ object Feature {
     const val GAME = "game"
     const val ENTER = "enter"
     const val EXIT = "exit"
+    const val STATE = "state"
 }

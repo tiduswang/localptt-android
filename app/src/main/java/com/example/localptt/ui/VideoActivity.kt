@@ -69,6 +69,9 @@ class VideoActivity : AppCompatActivity() {
     /** 是否由对端同步关闭。 */
     private var closedByRemote = false
 
+    /** 对端是否也在这个功能页里出现过。 */
+    private var peerWasHere = false
+
     // ---------- 画面偏好（持久化） ----------
 
     /** 画面旋转角度（0/90/180/270），两端各自保存自己的偏好。 */
@@ -153,15 +156,26 @@ class VideoActivity : AppCompatActivity() {
         lifecycleScope.launch {
             AppBus.videoInbound.collect { onSignaling(it) }
         }
-        // ③ 对端退出 → 我也退出
+        // ③ 对端退出 → 我也退出（exit 事件 / 对端进了别的功能 / 对端曾在这里、现在回了首页）
         lifecycleScope.launch {
             AppBus.featureEvents.collect { s ->
-                if (s.feature == Feature.VIDEO && s.action == Feature.EXIT) {
+                if (s.from == AppBus.myId) return@collect
+                if (s.feature == Feature.VIDEO && s.action != Feature.EXIT) peerWasHere = true
+                val explicitExit = s.action == Feature.EXIT && s.feature == Feature.VIDEO
+                val peerEnteredOther = s.action == Feature.ENTER && s.feature != Feature.VIDEO
+                val peerWentHome = s.action == Feature.STATE && s.feature.isBlank() && peerWasHere
+                if (explicitExit || peerEnteredOther || peerWentHome) {
                     closedByRemote = true
                     finish()
                 }
             }
         }
+    }
+
+    override fun onResume() {
+        super.onResume()
+        // 重新声明「我在视频页」，从别的页面返回 / 全屏切换后状态都不会错
+        AppBus.activeFeature = Feature.VIDEO
     }
 
     override fun onStart() {

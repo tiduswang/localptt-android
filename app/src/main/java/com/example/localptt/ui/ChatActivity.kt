@@ -73,6 +73,9 @@ class ChatActivity : AppCompatActivity() {
     /** 是否由对端同步关闭。 */
     private var closedByRemote = false
 
+    /** 对端是否也在这个功能页里出现过。 */
+    private var peerWasHere = false
+
     private val pickPhoto =
         registerForActivityResult(ActivityResultContracts.GetContent()) { uri: Uri? ->
             if (uri != null) sendPhoto(uri)
@@ -145,15 +148,25 @@ class ChatActivity : AppCompatActivity() {
             }
         }
 
-        // 对端退出 → 我也退出
+        // 对端退出 → 我也退出（exit 事件 / 对端进了别的功能 / 对端曾在这里、现在回了首页）
         lifecycleScope.launch {
             AppBus.featureEvents.collect { s ->
-                if (s.feature == Feature.CHAT && s.action == Feature.EXIT) {
+                if (s.from == AppBus.myId) return@collect
+                if (s.feature == Feature.CHAT && s.action != Feature.EXIT) peerWasHere = true
+                val explicitExit = s.action == Feature.EXIT && s.feature == Feature.CHAT
+                val peerEnteredOther = s.action == Feature.ENTER && s.feature != Feature.CHAT
+                val peerWentHome = s.action == Feature.STATE && s.feature.isBlank() && peerWasHere
+                if (explicitExit || peerEnteredOther || peerWentHome) {
                     closedByRemote = true
                     finish()
                 }
             }
         }
+    }
+
+    override fun onResume() {
+        super.onResume()
+        AppBus.activeFeature = Feature.CHAT
     }
 
     /** 统一的发送入口：没建网时明确提示，不静默丢弃。 */

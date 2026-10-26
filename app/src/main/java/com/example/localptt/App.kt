@@ -27,6 +27,8 @@ class App : Application() {
         // 掉线重连替换 client/server 时也不会「消息收不到」。
         runCatching { AppBus.chat = ChatManager(this) }
         runCatching { AppBus.game = GameManager(AppBus.myId) }
+        // 「一台打开功能，另一台跟着打开；一台退出，另一台跟着退出」的状态心跳
+        runCatching { AppBus.startFeatureStateSync() }
         installCrashGuard()
     }
 

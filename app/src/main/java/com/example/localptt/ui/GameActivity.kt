@@ -37,6 +37,9 @@ class GameActivity : AppCompatActivity() {
     /** 是否由对端同步关闭。 */
     private var closedByRemote = false
 
+    /** 对端是否也在这个功能页里出现过。 */
+    private var peerWasHere = false
+
     /** 掷骰子是否正在播放「滚动」动画（避免连点重复出招）。 */
     private var rolling = false
 
@@ -102,15 +105,25 @@ class GameActivity : AppCompatActivity() {
             }
         }
 
-        // 对端退出 → 我也退出
+        // 对端退出 → 我也退出（exit 事件 / 对端进了别的功能 / 对端曾在这里、现在回了首页）
         lifecycleScope.launch {
             AppBus.featureEvents.collect { s ->
-                if (s.feature == Feature.GAME && s.action == Feature.EXIT) {
+                if (s.from == AppBus.myId) return@collect
+                if (s.feature == Feature.GAME && s.action != Feature.EXIT) peerWasHere = true
+                val explicitExit = s.action == Feature.EXIT && s.feature == Feature.GAME
+                val peerEnteredOther = s.action == Feature.ENTER && s.feature != Feature.GAME
+                val peerWentHome = s.action == Feature.STATE && s.feature.isBlank() && peerWasHere
+                if (explicitExit || peerEnteredOther || peerWentHome) {
                     closedByRemote = true
                     finish()
                 }
             }
         }
+    }
+
+    override fun onResume() {
+        super.onResume()
+        AppBus.activeFeature = Feature.GAME
     }
 
     private fun startGame(type: String) {

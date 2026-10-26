@@ -232,12 +232,39 @@ class MainActivity : AppCompatActivity() {
             .onEach { renderMode(it) }
             .launchIn(lifecycleScope)
 
-        // 功能同步：一台进入，房间里的小伙伴一起进入
+        // 功能同步：一台进入，房间里的小伙伴一起进入（enter 事件 + state 心跳双通道）
         lifecycleScope.launch {
-            AppBus.featureEvents.collect { s ->
-                if (s.from != myId && s.action == Feature.ENTER) openRemotely(s.feature)
-            }
+            AppBus.featureEvents.collect { s -> onFeatureSync(s) }
         }
+    }
+
+    /**
+     * 功能同步的统一入口：
+     *  - `enter`：对端刚点开某个功能；
+     *  - `state`：对端每 2 秒上报一次「我正在哪个功能页」，用于丢包/重连后自动对齐。
+     * 两种情况只要对端在某个功能里、我不在同一个功能里，就跟过去。
+     *
+     * ★ 我刚主动退出同一个功能（15s 内）时**不重新打开**，而是再发一次 exit：
+     *   否则按返回键回到首页后，会被对端的旧状态每 2 秒重新弹回来（按不出去）。
+     */
+    private fun onFeatureSync(s: FeatureSync) {
+        if (s.from == AppBus.myId) return
+        val f = s.feature
+        if (f.isBlank()) return                              // 对端回首页了：由功能页自己退出
+        val wantIn = when (s.action) {
+            Feature.ENTER -> true
+            Feature.STATE -> true
+            else -> false                                    // exit 不处理：页面自己收
+        }
+        if (!wantIn) return
+        if (AppBus.activeFeature == f) return
+        if (AppBus.lastExitFeature == f &&
+            System.currentTimeMillis() - AppBus.lastExitAt < 15_000
+        ) {
+            if (s.action == Feature.STATE) AppBus.postFeatureExit(f)
+            return
+        }
+        openRemotely(f)
     }
 
     /**

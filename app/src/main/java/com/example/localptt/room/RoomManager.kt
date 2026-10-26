@@ -6,6 +6,7 @@ import com.example.localptt.AppBus
 import com.example.localptt.chat.ChatManager
 import com.example.localptt.chat.VoiceFileServer
 import com.example.localptt.data.ChatMsg
+import com.example.localptt.data.Feature
 import com.example.localptt.data.FeatureSync
 import com.example.localptt.data.GameCommit
 import com.example.localptt.data.GameInvite
@@ -639,7 +640,18 @@ object RoomManager {
                 is ChatMsg, is VoiceMeta -> AppBus.chat?.onMessage(msg)
                 is GameInvite, is GameCommit, is GameMove, is GameResult -> AppBus.game?.onMessage(msg)
                 is VideoCall -> AppBus.postVideo(msg)
-                is FeatureSync -> AppBus.featureEvents.tryEmit(msg)
+                is FeatureSync -> {
+                    // 先更新「对端现在在哪个功能页」，功能页再据此决定自己要不要退出。
+                    // state 心跳是空串时表示对端已回首页。
+                    AppBus.peerActiveFeature = when (msg.action) {
+                        Feature.EXIT ->
+                            if (AppBus.peerActiveFeature == msg.feature) null else AppBus.peerActiveFeature
+                        Feature.ENTER -> msg.feature
+                        Feature.STATE -> msg.feature.ifBlank { null }
+                        else -> AppBus.peerActiveFeature
+                    }
+                    AppBus.featureEvents.tryEmit(msg)
+                }
                 else -> Unit
             }
         } catch (e: Throwable) {

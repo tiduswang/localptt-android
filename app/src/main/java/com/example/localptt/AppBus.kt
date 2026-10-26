@@ -94,6 +94,43 @@ object AppBus {
     /** 当前处于前台的功能页（MainActivity 未打开任何功能页时为 null）。 */
     @Volatile var activeFeature: String? = null
 
+    /** 我最近一次主动退出的功能与时间：防止对端的旧状态把我拉回已经退出的页面。 */
+    @Volatile var lastExitFeature: String? = null
+    @Volatile var lastExitAt: Long = 0L
+
+    /** 对端当前所在的功能页（null = 对端在首页）。由收到的 FeatureSync 更新，功能页据此同步退出。 */
+    @Volatile var peerActiveFeature: String? = null
+
+    /**
+     * 功能状态心跳：每 2 秒告诉房间里的人「我现在在哪个功能页」（[Feature.STATE]）。
+     *
+     * 为什么需要它：enter/exit 是**事件**，丢一个包、掉线重连、或者一端先进房间另一端
+     * 才冷启动时，两边就会不同步（比如一台还在语音页、另一台已经回首页了）。
+     * 状态心跳每 2 秒发一次，对端据此自我校正 —— 这就是「同进同出」的兜底。
+     */
+    private val featureStateScope = CoroutineScope(Dispatchers.IO + SupervisorJob() + netGuard)
+    private var featureStateLoopStarted = false
+
+    fun startFeatureStateSync() {
+        if (featureStateLoopStarted) return
+        featureStateLoopStarted = true
+        featureStateScope.launch {
+            while (true) {
+                delay(2000)
+                runCatching {
+                    if (!isConnected) return@runCatching
+                    post(
+                        FeatureSync(
+                            myId, "all", uid(),
+                            activeFeature ?: "",
+                            com.example.localptt.data.Feature.STATE
+                        )
+                    )
+                }
+            }
+        }
+    }
+
     /** 最近一次收到的视频邀请方（UI 弹窗用）。 */
     @Volatile var pendingVideoCaller: String? = null
 
@@ -179,6 +216,8 @@ object AppBus {
      * 对端已退出则重复到达的 EXIT 会被忽略（页面已销毁，collector 取消）。
      */
     fun postFeatureExit(feature: String) {
+        lastExitFeature = feature
+        lastExitAt = System.currentTimeMillis()
         val sync = FeatureSync(myId, "all", uid(), feature, com.example.localptt.data.Feature.EXIT)
         post(sync)
         CoroutineScope(Dispatchers.IO + SupervisorJob() + netGuard).launch {
