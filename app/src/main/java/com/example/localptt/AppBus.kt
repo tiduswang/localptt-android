@@ -12,6 +12,7 @@ import com.example.localptt.net.ControlServer
 import com.example.localptt.net.DiscoveryListener
 import com.example.localptt.net.HostBeacon
 import com.example.localptt.net.UdpBus
+import com.example.localptt.net.WifiDirectManager
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.SharedFlow
 
@@ -42,6 +43,9 @@ object AppBus {
 
     /** 客户端侧自动发现（打开「加入」页时启动）。 */
     var discovery: DiscoveryListener? = null
+
+    /** Wi-Fi Direct 直连管理器（直连建房/加入时由 RoomManager 持有，收尾时 removeGroup）。 */
+    var p2p: WifiDirectManager? = null
 
     /** 默认空串而非 lateinit：进程重建的极端路径下也不会抛未初始化异常。 */
     var myId: String = ""
@@ -115,6 +119,8 @@ object AppBus {
         client = null
         try { bus?.release() } catch (_: Throwable) {}
         bus = null
+        // ★ Wi-Fi Direct 组不在这里拆：它由 RoomManager 按「是否直连模式」决定，
+        //   否则普通掉线重连时会误删正在使用的直连组。
         // chat / game 是单例，这里**不能**置空：功能页已经订阅了它们的 Flow
         peers.clear()
     }

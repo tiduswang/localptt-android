@@ -6,8 +6,10 @@ import android.net.Uri
 import android.util.Log
 import com.example.localptt.AppBus
 import com.example.localptt.data.*
+import com.example.localptt.net.lanIpv4
 import com.example.localptt.net.localIpv4
 import com.example.localptt.net.netScope
+import com.example.localptt.net.p2pIpv4
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -141,7 +143,8 @@ class ChatManager(private val ctx: Context) {
 
     /** 语音文件对外 URL：**发送方自己**的 IP（每台设备都起 VoiceFileServer）。 */
     private fun voiceUrl(f: File): String {
-        val myIp = localIpv4() ?: "127.0.0.1"
+        // 直连模式必须给对端 p2p 网段地址；局域网模式优先 wlan，最后才退到任意网卡
+        val myIp = lanIpv4() ?: p2pIpv4() ?: localIpv4() ?: "127.0.0.1"
         return "http://$myIp:${VoiceFileServer.PORT}/${f.name}"
     }
 

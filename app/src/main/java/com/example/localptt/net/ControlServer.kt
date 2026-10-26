@@ -29,10 +29,19 @@ class ControlServer(
     private val myName: String,
     private val roomName: String = myName,
     private val myAvatar: String = "bear",
+    /** 本机 UDP 语音实际端口，随名单下发给客户端。 */
+    private val voicePort: Int = 5004,
     private val preferPort: Int = 8888
 ) {
     private val peers = ConcurrentHashMap<String, PeerConn>()
     @Volatile private var running = false
+
+    /**
+     * 对外公布的本机地址。
+     * 直连模式下必须填 192.168.49.1（p2p 网卡），否则客户端拿到的语音目标可能是
+     * 已经失效的 wlan 地址；普通局域网模式也可以由 RoomManager 显式指定。
+     */
+    @Volatile var advertisedIp: String? = null
 
     /** 实际监听端口（可能与约定端口不同），beacon 广播时会带上。 */
     @Volatile var actualPort: Int = preferPort
@@ -49,8 +58,9 @@ class ControlServer(
     /** 当前在线客户端数（不含主机自己）。 */
     val guestCount: Int get() = peers.size
 
-    /** 主机自身 IP：普通 Wi-Fi 用本机地址，不再硬编码。 */
-    private fun selfIp(): String = localIpv4() ?: "127.0.0.1"
+    /** 主机自身 IP：优先局域网，其次 Wi-Fi Direct，最后才用任意网卡兜底。 */
+    private fun selfIp(): String =
+        advertisedIp ?: lanIpv4() ?: p2pIpv4() ?: localIpv4() ?: "127.0.0.1"
 
     fun start(): Boolean {
         val s = serverSocket
@@ -89,6 +99,7 @@ class ControlServer(
                             name = msg.name,
                             ip = sock.inetAddress?.hostAddress ?: "",
                             avatar = msg.avatar,
+                            voicePort = msg.voicePort,
                             out = writer
                         )
                         // ① 明确告知客户端「你已进入房间」，客户端收到才算连上
@@ -150,8 +161,10 @@ class ControlServer(
      */
     private fun broadcastPeerList() {
         val list = ArrayList<Peer>(peers.size + 1).apply {
-            add(Peer(myId, myName, selfIp(), "host", myAvatar))
-            peers.values.forEach { add(Peer(it.id, it.name, it.ip, "client", it.avatar)) }
+            add(Peer(myId, myName, selfIp(), "host", myAvatar, voicePort))
+            peers.values.forEach {
+                add(Peer(it.id, it.name, it.ip, "client", it.avatar, it.voicePort))
+            }
         }
         val pl = PeerList(myId, "all", uid(), list)
         peers.values.forEach { it.send(pl) }
@@ -186,6 +199,7 @@ class ControlServer(
         val name: String,
         val ip: String,
         val avatar: String,
+        val voicePort: Int,
         val out: PrintWriter
     ) {
         @Volatile var lastSeen: Long = System.currentTimeMillis()

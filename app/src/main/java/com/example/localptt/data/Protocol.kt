@@ -24,7 +24,12 @@ sealed interface Msg {
 data class Hello(
     override val from: String, override val to: String, override val id: String,
     val name: String, val role: String,   // "host" | "client"
-    val avatar: String = "bear"           // 卡通头像 key，见 Avatars
+    val avatar: String = "bear",          // 卡通头像 key，见 Avatars
+    /**
+     * 本机 UDP 语音实际监听的端口。
+     * 5004 被占用时 UdpBus 会自动顺延；不带端口会让对端一直发到 5004 而收不到声音。
+     */
+    val voicePort: Int = 5004
 ) : Msg
 
 /**
@@ -64,7 +69,9 @@ data class Peer(
     val name: String,
     val ip: String,
     val role: String,          // "host" | "client"
-    val avatar: String = "bear"
+    val avatar: String = "bear",
+    /** 对端 UDP 语音端口（见 [Hello.voicePort]）。 */
+    val voicePort: Int = 5004
 )
 
 /** 微聊：kind ∈ {text, emoji, voice, photo} */

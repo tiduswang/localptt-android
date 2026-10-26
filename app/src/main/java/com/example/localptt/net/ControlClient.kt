@@ -27,7 +27,9 @@ class ControlClient(
     private val myId: String,
     private var myName: String,
     private var myAvatar: String = "bear",
-    private val port: Int = 8888
+    private val port: Int = 8888,
+    /** 本机 UDP 语音实际端口，随 Hello 告诉主机。 */
+    private val voicePort: Int = 5004
 ) {
     private var sock: Socket? = null
     private var out: PrintWriter? = null
@@ -81,7 +83,7 @@ class ControlClient(
                 sock = s
                 out = PrintWriter(s.getOutputStream(), true)
                 lastRecv = System.currentTimeMillis()
-                send(Hello(myId, "all", uid(), myName, "client", myAvatar))
+                send(Hello(myId, "all", uid(), myName, "client", myAvatar, voicePort))
 
                 // ① 超时未获主机确认 → 判失败
                 launch {
@@ -160,7 +162,7 @@ class ControlClient(
     fun updateProfile(name: String, avatar: String) {
         myName = name
         myAvatar = avatar
-        send(Hello(myId, "all", uid(), name, "client", avatar))
+        send(Hello(myId, "all", uid(), name, "client", avatar, voicePort))
     }
 
     fun disconnect() {

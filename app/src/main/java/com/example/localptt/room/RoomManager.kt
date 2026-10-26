@@ -23,9 +23,11 @@ import com.example.localptt.net.HostBeacon
 import com.example.localptt.net.UdpBus
 import com.example.localptt.net.WifiDirectManager
 import com.example.localptt.net.WifiGate
+import com.example.localptt.net.isP2pAddress
+import com.example.localptt.net.lanIpv4
 import com.example.localptt.net.localIpv4
 import com.example.localptt.net.netGuard
-import com.example.localptt.net.wifiIpv4
+import com.example.localptt.net.p2pIpv4
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -76,6 +78,18 @@ enum class RoomState {
 }
 
 /**
+ * 互联方式（UI 用来解释「我是靠什么连上的」，也决定收尾时要不要拆 P2P 组）。
+ *
+ * - [LAN]    两台手机连在同一个路由器 / 热点下：UDP 广播 + mDNS 自动发现；
+ * - [DIRECT] 没有路由器：用 Wi-Fi Direct 自组网（组长地址通常 192.168.49.1）。
+ */
+enum class ConnectMode {
+    NONE,
+    LAN,
+    DIRECT
+}
+
+/**
  * 房间生命周期的唯一权威（进程级单例）。
  *
  * ★ 为什么要有这一层（历史 Bug：「点了开房间后一直显示正在处理中」）
@@ -97,9 +111,9 @@ object RoomManager {
     private const val TAG = "LocalPTT"
 
     /** 单个操作的最长等待：超时后强制回到可用状态，绝不让用户干等。 */
-    const val CREATE_TIMEOUT_MS = 15_000L
+    const val CREATE_TIMEOUT_MS = 25_000L   // 含 Wi-Fi Direct 建组（通常 3~8s）
     const val JOIN_TIMEOUT_MS = 15_000L
-    const val P2P_TIMEOUT_MS = 8_000L
+    const val P2P_TIMEOUT_MS = 14_000L
 
     /** 掉线后自动重连次数上限。 */
     private const val MAX_AUTO_RETRY = 3
@@ -121,6 +135,10 @@ object RoomManager {
     private val _peers = MutableStateFlow<List<Peer>>(emptyList())
     val peers: StateFlow<List<Peer>> = _peers.asStateFlow()
 
+    /** 当前互联方式（路由器局域网 / Wi-Fi Direct）。 */
+    private val _mode = MutableStateFlow(ConnectMode.NONE)
+    val mode: StateFlow<ConnectMode> = _mode.asStateFlow()
+
     /** 信令分发协程（进程级，跟随 RoomManager 而非某个页面）。 */
     private var dispatchJob: Job? = null
 
@@ -130,8 +148,9 @@ object RoomManager {
     // ---------- 对外操作 ----------
 
     /**
-     * 开房：先以「普通 Wi-Fi 主机」模式立刻对外服务（两台手机连同一个路由器/热点即可），
-     * 只有在**没有可用 Wi-Fi 局域网**时才尝试 Wi-Fi Direct 直连。
+     * 开房：
+     *  - 有路由器局域网（同一 Wi-Fi）→ 普通主机模式，UDP 广播/mDNS 自动被发现；
+     *  - 没有路由器 → 自动建 Wi-Fi Direct 组，让另一台手机直连过来。
      */
     fun createRoom(app: Context) {
         val ctx = app.applicationContext
@@ -140,15 +159,25 @@ object RoomManager {
         }
     }
 
-    /** 加入房间。IP 可以是普通局域网地址，也可以是 Wi-Fi Direct 组长的 192.168.49.1。 */
-    fun joinRoom(app: Context, ip: String, port: Int = 8888, name: String = "", remember: Boolean = true) {
+    /**
+     * 加入房间。IP 可以是普通局域网地址，也可以是 Wi-Fi Direct 组长的 192.168.49.1。
+     * @param viaP2p true 表示刚由 Wi-Fi Direct 连上组长，收尾时不能拆掉这个组。
+     */
+    fun joinRoom(
+        app: Context,
+        ip: String,
+        port: Int = 8888,
+        name: String = "",
+        remember: Boolean = true,
+        viaP2p: Boolean = false
+    ) {
         if (ip.isBlank()) {
             _status.value = "😵 还不知道房间在哪儿"
             return
         }
         val ctx = app.applicationContext
         scope.launch {
-            runExclusive(RoomState.JOINING) { doJoinRoom(ctx, ip.trim(), port, name, remember) }
+            runExclusive(RoomState.JOINING) { doJoinRoom(ctx, ip.trim(), port, name, remember, viaP2p) }
         }
     }
 
@@ -270,30 +299,58 @@ object RoomManager {
         val g = generation.incrementAndGet()
         runCatching { cleanup() }
 
-        // ★ Wi-Fi 门禁：必须在建 server 之前判断。
-        //   没 Wi-Fi 时开房注定失败，与其让用户对着 15 秒超时发呆，不如先尽力打开、
-        //   实在不行立刻给一句人话（"Wi-Fi 还没打开"）。
-        if (!ensureWifiReady(app)) {
+        // ★ Wi-Fi 门禁：只要求「Wi-Fi 开关打开」。没连路由器也能走 Wi-Fi Direct 直连，
+        //   所以这里不再因为 NO_LAN 就拒绝开房（旧版正是因此让直连形同虚设）。
+        if (!ensureWifiPowered(app)) {
             throw IllegalStateException("Wi-Fi 还没打开，先在手机上打开它再来哦")
         }
 
+        // 有路由器局域网 → 普通主机模式；没有 → 直接建 Wi-Fi Direct 组。
+        val lanIp = withContext(Dispatchers.IO) { lanIpv4() }
+        val useDirect = lanIp == null
+
         // 所有 socket 操作都放 IO 线程：过去在 UI 线程 bind ServerSocket，
         // 三星等机型上会明显卡顿甚至 ANR，看起来就是「点了没反应」。
+        val bus = withContext(Dispatchers.IO) {
+            UdpBus(AppBus.myId).apply { startReceiving() }
+        }
         val server = withContext(Dispatchers.IO) {
-            ControlServer(AppBus.myId, AppBus.myName, AppBus.roomName, AppBus.myAvatar).also {
-                if (!it.start()) throw IllegalStateException("端口 8888 起都被占用了")
+            ControlServer(
+                AppBus.myId, AppBus.myName, AppBus.roomName, AppBus.myAvatar, bus.actualPort
+            ).also {
+                if (!it.start()) {
+                    bus.release()
+                    throw IllegalStateException("端口 8888 起都被占用了")
+                }
             }
         }
         if (generation.get() != g) {
-            runCatching { server.stop() }
+            closeAll(server, bus, null, null)
+            return
+        }
+
+        var p2pMgr: WifiDirectManager? = null
+        var selfIp: String? = lanIp
+        if (useDirect) {
+            setStatus("📡 没有路由器，正在开 Wi-Fi 直连…")
+            val group = openP2pGroup(app)
+            if (group == null) {
+                closeAll(server, bus, null, null)
+                throw IllegalStateException(
+                    "开不了 Wi-Fi 直连：检查 Wi-Fi 是否打开、定位/附近设备权限是否允许"
+                )
+            }
+            p2pMgr = group.first
+            selfIp = group.second
+        }
+        if (generation.get() != g) {
+            closeAll(server, bus, null, null)
+            runCatching { p2pMgr?.removeGroup() }
             return
         }
 
         // 资源先用局部变量收着：只有确认本次操作没被「重新开始」作废，才挂到 AppBus。
         // 否则半路被 forceReset 抢先，这些 socket 就会变成没人能关的孤儿。
-        val bus = withContext(Dispatchers.IO) {
-            UdpBus(AppBus.myId).apply { startReceiving() }
-        }
         val voice = withContext(Dispatchers.IO) {
             VoiceFileServer(File(app.cacheDir, "voice").apply { mkdirs() }).apply { start() }
         }
@@ -302,54 +359,62 @@ object RoomManager {
         }
         if (generation.get() != g) {
             closeAll(server, bus, voice, beacon)
+            runCatching { p2pMgr?.removeGroup() }
             return
         }
+
+        val ip = selfIp ?: "127.0.0.1"
+        val port = server.actualPort
+        server.advertisedIp = ip
 
         AppBus.server = server
         AppBus.bus = bus
         AppBus.voiceServer = voice
         AppBus.beacon = beacon
+        AppBus.p2p = p2pMgr
         ensureSingletons(app)
 
-        val lanIp = withContext(Dispatchers.IO) { wifiIpv4() ?: localIpv4() }
-        val ip = lanIp ?: "127.0.0.1"
-        val port = server.actualPort
-
         AppBus.peers.clear()
-        AppBus.peers += Peer(AppBus.myId, AppBus.myName, ip, "host", AppBus.myAvatar)
+        AppBus.peers += Peer(AppBus.myId, AppBus.myName, ip, "host", AppBus.myAvatar, bus.actualPort)
         setPeers(AppBus.peers.toList())
 
         if (generation.get() != g) return      // 期间被「重新开始」打断 → 不接管 UI 状态
         autoRetry = 0
+        _mode.value = if (useDirect) ConnectMode.DIRECT else ConnectMode.LAN
         _state.value = RoomState.HOSTING
-        _status.value = "🏠 ${AppBus.roomName} 开好啦！\n" +
-                "我的地址 $ip:$port，小伙伴点「🔍 找小伙伴」就能进来"
+        _status.value = if (useDirect) {
+            "📡 直连房间开好啦！\n小伙伴点「🔍 找小伙伴」，在「Wi-Fi 直连」里点「PTT-${AppBus.myName}」"
+        } else {
+            "🏠 ${AppBus.roomName} 开好啦！\n🌐 同一个 Wi-Fi：我的地址 $ip:$port，" +
+                "小伙伴点「🔍 找小伙伴」就能进来"
+        }
         startDispatch()
-
-        // 只有在「没有 Wi-Fi 局域网」时才尝试 Wi-Fi Direct 直连。
-        // ★ 三星 S23U 等机型上，已经连着 Wi-Fi 时强行 createGroup 会触发系统重置 Wi-Fi，
-        //   房间反而卡在中间态。这里改为按需，且带 8s 超时，失败纯属可选增强不影响主流程。
-        if (lanIp == null) scope.launch { tryP2pFallback(app, ip, port, g) }
-        else Log.i(TAG, "检测到 Wi-Fi 局域网 $lanIp，沿用普通 Wi-Fi 主机模式")
+        Log.i(TAG, if (useDirect) "Wi-Fi Direct 直连模式，组长地址 $ip" else "路由器局域网模式，本机 $ip")
     }
 
     private suspend fun doJoinRoom(
-        app: Context, ip: String, port: Int, name: String, remember: Boolean
+        app: Context,
+        ip: String,
+        port: Int,
+        name: String,
+        remember: Boolean,
+        viaP2p: Boolean
     ) {
         val g = generation.incrementAndGet()
-        runCatching { cleanup() }
+        // 走 Wi-Fi Direct 进来时，组是 MainActivity 刚刚建好的，这里绝不能拆。
+        runCatching { cleanup(skipP2p = viaP2p) }
 
         // ★ Wi-Fi 门禁：没 Wi-Fi 时 TCP 建连只会白等超时（历史上「一直显示正在处理中」
         //   的一大来源就是这个）。先尽力自动打开，打不开就立刻说清楚。
-        if (!ensureWifiReady(app)) {
+        if (!ensureWifiPowered(app)) {
             throw IllegalStateException("Wi-Fi 还没打开，连不上小伙伴哦")
         }
 
-        val client = withContext(Dispatchers.IO) {
-            ControlClient(ip, AppBus.myId, AppBus.myName, AppBus.myAvatar, port)
-        }
         val bus = withContext(Dispatchers.IO) {
             UdpBus(AppBus.myId).apply { startReceiving() }
+        }
+        val client = withContext(Dispatchers.IO) {
+            ControlClient(ip, AppBus.myId, AppBus.myName, AppBus.myAvatar, port, bus.actualPort)
         }
         val voice = withContext(Dispatchers.IO) {
             VoiceFileServer(File(app.cacheDir, "voice").apply { mkdirs() }).apply { start() }
@@ -365,7 +430,14 @@ object RoomManager {
         ensureSingletons(app)
 
         val label = name.ifBlank { ip }
-        setStatus("🔍 正在进 $label 的房间…")
+        val direct = viaP2p || isP2pAddress(ip)
+        if (direct) {
+            _mode.value = ConnectMode.DIRECT
+            setStatus("🔍 正在通过 Wi-Fi 直连进 $label 的房间…")
+        } else {
+            _mode.value = ConnectMode.LAN
+            setStatus("🔍 正在进 $label 的房间…")
+        }
 
         val confirmed = CompletableDeferred<Boolean>()
         client.connect(
@@ -383,68 +455,67 @@ object RoomManager {
 
         if (remember) prefs(app).edit().putString(KEY_LAST_HOST, "$ip:$port").apply()
         autoRetry = 0
+        val selfIp = withContext(Dispatchers.IO) {
+            if (direct) p2pIpv4() ?: localIpv4() else lanIpv4() ?: localIpv4()
+        } ?: ""
         AppBus.peers.clear()
-        AppBus.peers += Peer(AppBus.myId, AppBus.myName, localIpv4() ?: "", "client", AppBus.myAvatar)
+        AppBus.peers += Peer(AppBus.myId, AppBus.myName, selfIp, "client", AppBus.myAvatar, bus.actualPort)
         setPeers(AppBus.peers.toList())
 
         if (generation.get() != g) return      // 期间被「重新开始」打断 → 不接管 UI 状态
         _state.value = RoomState.JOINED
-        setStatus("🎉 进房间啦！正在等 $label 发名单…")
+        setStatus(
+            if (direct) "🎉 直连成功！正在等 $label 发名单…"
+            else "🎉 进房间啦！正在等 $label 发名单…"
+        )
         startDispatch()
     }
 
     /**
-     * 保证开始操作前 Wi-Fi 可用：能自动打开就打开（旧系统），并留一个短窗口等 IP 落地。
-     * @return true 可用；false 表示确实不可得，调用方应立刻失败并说清原因。
+     * 门禁只检查「Wi-Fi 开关」：路由器局域网与 Wi-Fi Direct 都依赖它，
+     * 但「开了 Wi-Fi 却没连路由器」并不影响直连，所以不再要求 [WifiGate.isReady]。
      */
-    private suspend fun ensureWifiReady(app: Context): Boolean {
-        if (WifiGate.isReady(app)) return true
+    private suspend fun ensureWifiPowered(app: Context): Boolean {
+        if (WifiGate.isWifiOn(app)) return true
         setStatus("📶 正在等 Wi-Fi 打开…")
         WifiGate.tryEnable(app)
-        return WifiGate.awaitReady(app, 6_000)
+        return WifiGate.awaitWifiOn(app, 8_000)
     }
 
     /**
-     * 无可用的 Wi-Fi 局域网时，退一步用 Wi-Fi Direct 自组网。
+     * 无可用的路由器局域网时，用 Wi-Fi Direct 自组网（我是组长）。
      * ★ 先 removeGroup 再 createGroup：残留的旧 P2P 组会让 createGroup 一直返回 BUSY，
      *   回调可能永远不来 —— 这是同类开源实现里最常见的「卡住」根因。
+     *
+     * @return (管理器, 组长地址)；失败返回 null，由调用方给出可读错误。
      */
-    private suspend fun tryP2pFallback(app: Context, currentIp: String, port: Int, g: Int) {
-        val mgr = runCatching { WifiDirectManager(app) }.getOrNull() ?: return
-        val goAddress: InetAddress? = try {
-            withTimeoutOrNull(P2P_TIMEOUT_MS) {
-                runCatching { mgr.removeGroup() }
-                delay(600)  // 给系统一点时间释放旧组
-                suspendCancellableCoroutine { cont ->
-                    var resumed = false
-                    runCatching {
-                        mgr.createGroup { ok, info ->
-                            if (!resumed) {
-                                resumed = true
-                                cont.resume(if (ok) info?.groupOwnerAddress else null)
-                            }
+    private suspend fun openP2pGroup(app: Context): Pair<WifiDirectManager, String>? {
+        val mgr = runCatching { WifiDirectManager(app) }.getOrNull() ?: return null
+        // 让对端在「Wi-Fi 直连」列表里看到 PTT-昵称（Android 10+）
+        runCatching { mgr.setDeviceName("PTT-${AppBus.myName}") }
+        val goAddress: InetAddress? = withTimeoutOrNull(P2P_TIMEOUT_MS) {
+            runCatching { mgr.removeGroup() }
+            delay(600)  // 给系统一点时间释放旧组
+            suspendCancellableCoroutine { cont ->
+                var resumed = false
+                runCatching {
+                    mgr.createGroup { ok, info ->
+                        if (!resumed) {
+                            resumed = true
+                            cont.resume(if (ok) info?.groupOwnerAddress else null)
                         }
-                    }.onFailure {
-                        if (!resumed) { resumed = true; cont.resume(null) }
                     }
+                }.onFailure {
+                    if (!resumed) { resumed = true; cont.resume(null) }
                 }
             }
-        } catch (e: Throwable) {
-            Log.w(TAG, "Wi-Fi Direct 直连不可用：${e.message}")
-            null
         }
-
         if (goAddress == null) {
-            Log.i(TAG, "Wi-Fi Direct 未建成，保持普通主机模式")
-            return
-        }
-        if (generation.get() != g || AppBus.server == null) {
             runCatching { mgr.removeGroup() }
-            return
+            Log.w(TAG, "Wi-Fi Direct 建组失败")
+            return null
         }
-        val goIp = goAddress.hostAddress ?: currentIp
-        setStatus("🏠 ${AppBus.roomName} 开好啦（直连模式）\n" +
-                "我的地址 $goIp:$port，小伙伴点「🔍 找小伙伴」就能进来")
+        return mgr to (goAddress.hostAddress ?: "192.168.49.1")
     }
 
     /** 已连接后又断开：有限次数自动重连，超过次数交回给用户手动点。 */
@@ -468,7 +539,8 @@ object RoomManager {
         setStatus("😢 和小伙伴走散了，正在重新连…（第 $autoRetry 次）")
         delay(1500)
         val (ip, port) = saved
-        joinRoom(app, ip, port, remember = false)
+        // 直连模式保留 P2P 组，重连仍然走组长地址
+        joinRoom(app, ip, port, remember = false, viaP2p = _mode.value == ConnectMode.DIRECT)
     }
 
     private suspend fun forceIdle(msg: String) {
@@ -479,12 +551,20 @@ object RoomManager {
 
     // ---------- 资源与信令 ----------
 
-    /** 释放全部网络资源（chat/game 是进程内单例，这里不清，功能页订阅的 Flow 才不会失效）。 */
-    private suspend fun cleanup() {
+    /**
+     * 释放全部网络资源（chat/game 是进程内单例，这里不清，功能页订阅的 Flow 才不会失效）。
+     * @param skipP2p true = 保留当前 Wi-Fi Direct 组（刚连上组长、正要进房间时用）。
+     */
+    private suspend fun cleanup(skipP2p: Boolean = false) {
         withContext(Dispatchers.IO) {
             runCatching { AppBus.reset() }
+            if (!skipP2p) {
+                runCatching { AppBus.p2p?.removeGroup() }
+                AppBus.p2p = null
+            }
             AppBus.peers.clear()
         }
+        if (!skipP2p) _mode.value = ConnectMode.NONE
     }
 
     /** 关闭本次操作已经建出来的资源（还没挂到 AppBus 上的那些）。 */
@@ -527,7 +607,13 @@ object RoomManager {
                 is PeerList -> {
                     AppBus.peers.clear()
                     AppBus.peers.addAll(msg.peers)
-                    msg.peers.forEach { if (it.id != AppBus.myId) AppBus.bus?.addTarget(it.ip) }
+                    // 语音目标整表替换（带上每台设备的实际 UDP 端口），成员离开不会残留
+                    AppBus.bus?.setTargets(
+                        msg.peers.asSequence()
+                            .filter { it.id != AppBus.myId && it.ip.isNotBlank() }
+                            .map { it.ip to it.voicePort }
+                            .toList()
+                    )
                     setPeers(msg.peers)
                     updateRoomStatusFromPeers(msg.peers)
                 }

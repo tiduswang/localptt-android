@@ -10,6 +10,7 @@ import android.net.wifi.p2p.WifiP2pDevice
 import android.net.wifi.p2p.WifiP2pDeviceList
 import android.net.wifi.p2p.WifiP2pInfo
 import android.net.wifi.p2p.WifiP2pManager
+import android.os.Build
 import android.os.Looper
 import android.util.Log
 import kotlinx.coroutines.cancel
@@ -38,6 +39,21 @@ class WifiDirectManager(private val ctx: Context) {
     }.getOrNull()
 
     private val available: Boolean get() = mgr != null && channel != null
+
+    /** 直连发现广播接收器（常驻，直到 [stopDiscovery]）。 */
+    private var discoveryReceiver: BroadcastReceiver? = null
+
+    /**
+     * 把本机在「Wi-Fi 直连」列表里的名字改成 `PTT-昵称`，方便小伙伴认出来。
+     * 仅 Android 10（API 29）及以上支持；旧系统只能显示手机型号。
+     */
+    fun setDeviceName(name: String) {
+        if (Build.VERSION.SDK_INT < 29) return
+        val m = mgr ?: return
+        val c = channel ?: return
+        runCatching { m.setDeviceName(c, name.take(32), null) }
+            .onFailure { Log.w("LocalPTT", "setDeviceName 失败：${it.message}") }
+    }
 
     /** 建组（作为主机/GO）。成功后通过回调拿到 GO 信息。 */
     fun createGroup(onResult: (Boolean, WifiP2pInfo?) -> Unit) {
@@ -83,13 +99,27 @@ class WifiDirectManager(private val ctx: Context) {
         val m: WifiP2pManager? = mgr
         val c: WifiP2pManager.Channel? = channel
         if (m == null || c == null) { onResult(false); return }
-        runCatching {
-            m.connect(c, WifiP2pConfig.Builder()
+        val config = if (Build.VERSION.SDK_INT >= 29) {
+            WifiP2pConfig.Builder()
                 .setDeviceAddress(MacAddress.fromString(goDevice.deviceAddress))
                 .setGroupOperatingBand(WifiP2pConfig.GROUP_OWNER_BAND_2GHZ) // 强制 2.4GHz
-                .build(), object : WifiP2pManager.ActionListener {
+                // 0 = 尽量让对方（开房间的一方）当组长，自己以客户端身份加入
+                .setGroupOwnerIntent(0)
+                .build()
+        } else {
+            @Suppress("DEPRECATION")
+            WifiP2pConfig().apply {
+                deviceAddress = goDevice.deviceAddress
+                groupOwnerIntent = 0
+            }
+        }
+        runCatching {
+            m.connect(c, config, object : WifiP2pManager.ActionListener {
                 override fun onSuccess() = onResult(true)
-                override fun onFailure(r: Int) = onResult(false)
+                override fun onFailure(r: Int) {
+                    Log.w("LocalPTT", "P2P connect 失败 reason=$r")
+                    onResult(false)
+                }
             })
         }.onFailure {
             Log.w("LocalPTT", "P2P connect 失败：${it.message}")
@@ -134,8 +164,11 @@ class WifiDirectManager(private val ctx: Context) {
     }
 
     /**
-     * 发现附近可连接的 Wi-Fi Direct 设备。
-     * [onPeers] 在拿到设备列表时回调；[onError] 在发现启动失败时回调（reason 为可读原因）。
+     * 发现附近可连接的 Wi-Fi Direct 设备（持续刷新）。
+     * [onPeers] 每次设备列表变化时回调；[onError] 在发现启动失败时回调。
+     *
+     * 与旧实现的区别：接收器**常驻**，因此列表会跟着附近设备变化自动更新；
+     * 弹窗关闭时调用 [stopDiscovery] 释放，不会留下悬挂的广播接收器。
      */
     fun discoverPeers(
         onPeers: (List<WifiP2pDevice>) -> Unit,
@@ -147,53 +180,64 @@ class WifiDirectManager(private val ctx: Context) {
             onError("本机不支持 Wi-Fi Direct")
             return
         }
-        var delivered = false
+        stopDiscovery()
+        var errorFired = false
         val receiver = object : BroadcastReceiver() {
-            override fun onReceive(c: Context?, intent: Intent?) {
+            override fun onReceive(context: Context?, intent: Intent?) {
                 when (intent?.action) {
                     WifiP2pManager.WIFI_P2P_PEERS_CHANGED_ACTION -> {
-                        m.requestPeers(channel) { list: WifiP2pDeviceList ->
-                            if (!delivered) {
-                                delivered = true
-                                onPeers(list.deviceList.toList())
-                                runCatching { ctx.unregisterReceiver(this) }
+                        m.requestPeers(c) { list: WifiP2pDeviceList ->
+                            val usable = list.deviceList.filter {
+                                it.status == WifiP2pDevice.AVAILABLE ||
+                                    it.status == WifiP2pDevice.INVITED
                             }
+                            onPeers(usable)
                         }
                     }
                     WifiP2pManager.WIFI_P2P_STATE_CHANGED_ACTION -> {
                         val enabled = intent.getIntExtra(WifiP2pManager.EXTRA_WIFI_STATE, -1) ==
                                 WifiP2pManager.WIFI_P2P_STATE_ENABLED
-                        if (!enabled && !delivered) {
-                            delivered = true
+                        if (!enabled && !errorFired) {
+                            errorFired = true
                             onError("Wi-Fi Direct 未开启")
-                            runCatching { ctx.unregisterReceiver(this) }
                         }
                     }
                 }
             }
         }
+        discoveryReceiver = receiver
         runCatching {
             ctx.registerReceiver(receiver, IntentFilter().apply {
                 addAction(WifiP2pManager.WIFI_P2P_PEERS_CHANGED_ACTION)
                 addAction(WifiP2pManager.WIFI_P2P_STATE_CHANGED_ACTION)
             })
-        }.onFailure { onError("注册广播接收器失败"); return }
+        }.onFailure {
+            discoveryReceiver = null
+            onError("注册广播接收器失败")
+            return
+        }
 
         runCatching {
             m.discoverPeers(c, object : WifiP2pManager.ActionListener {
                 override fun onSuccess() { /* 结果经 PEERS_CHANGED 广播回来 */ }
                 override fun onFailure(reason: Int) {
-                    runCatching { ctx.unregisterReceiver(receiver) }
-                    if (!delivered) {
-                        delivered = true
+                    stopDiscovery()
+                    if (!errorFired) {
+                        errorFired = true
                         onError(describeDiscoverError(reason))
                     }
                 }
             })
         }.onFailure {
-            runCatching { ctx.unregisterReceiver(receiver) }
+            stopDiscovery()
             onError("P2P 发现不可用")
         }
+    }
+
+    /** 停止持续发现（同时注销广播接收器）。 */
+    fun stopDiscovery() {
+        discoveryReceiver?.let { runCatching { ctx.unregisterReceiver(it) } }
+        discoveryReceiver = null
     }
 
     private fun describeDiscoverError(reason: Int): String = when (reason) {

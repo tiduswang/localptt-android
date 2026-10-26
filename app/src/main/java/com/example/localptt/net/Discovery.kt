@@ -46,12 +46,13 @@ object Discovery {
     const val HOST_TIMEOUT_MS = 6000L
 }
 
-/** 本机在 p2p/wlan 等网卡上的 IPv4（主机广播与 UI 显示用）。 */
-fun localIpv4(): String? = runCatching {
+/** 按网卡名前缀挑出第一个可用的 IPv4 地址。 */
+private fun ipv4On(pick: (String) -> Boolean): String? = runCatching {
     NetworkInterface.getNetworkInterfaces()?.let { e ->
         e.toList()
             .asSequence()
             .filter { it.isUp && !it.isLoopback }
+            .filter { pick(it.name.lowercase()) }
             .flatMap { it.interfaceAddresses.asSequence() }
             .map { it.address }
             .firstOrNull { it is Inet4Address && !it.isLoopbackAddress && !it.isLinkLocalAddress }
@@ -59,28 +60,33 @@ fun localIpv4(): String? = runCatching {
     }
 }.getOrNull()
 
+/** 本机任意一块可用网卡的 IPv4（含移动数据；仅作最后兜底）。 */
+fun localIpv4(): String? = ipv4On { true }
+
 /**
- * 本机在 **Wi-Fi / 以太网** 网卡上的 IPv4；没有则返回 null。
+ * **路由器 / 普通 Wi-Fi 局域网** 上的 IPv4；不含 p2p 与移动数据。
+ * 有值说明「两台手机可以靠同一个路由器互联」，此时完全不需要 Wi-Fi Direct。
+ */
+fun lanIpv4(): String? = ipv4On {
+    it.startsWith("wlan") || it.startsWith("eth") || it.startsWith("ap")
+}
+
+/** Wi-Fi Direct 组（p2p0）上的 IPv4；客户端通常是 192.168.49.x。 */
+fun p2pIpv4(): String? = ipv4On { it.startsWith("p2p") }
+
+/**
+ * 本机在 **Wi-Fi / 以太网 / Wi-Fi Direct** 网卡上的 IPv4；没有则返回 null。
  *
  * 与 [localIpv4] 的区别：后者会把移动数据网卡的地址也算进来。判断「此刻是否在
- * 一个可用的 Wi-Fi 局域网里」必须用这个 —— 只有不存在局域网时才需要退到
- * Wi-Fi Direct 自组网，否则在三星等机型上强行建 P2P 组会触发系统重置 Wi-Fi。
+ * 一个可用的本地网络里」必须用这个，否则会误把 4G 当成局域网。
  */
-fun wifiIpv4(): String? = runCatching {
-    NetworkInterface.getNetworkInterfaces()?.let { e ->
-        e.toList()
-            .asSequence()
-            .filter { it.isUp && !it.isLoopback }
-            .filter {
-                val n = it.name.lowercase()
-                n.startsWith("wlan") || n.startsWith("eth") || n.startsWith("ap") || n.startsWith("p2p")
-            }
-            .flatMap { it.interfaceAddresses.asSequence() }
-            .map { it.address }
-            .firstOrNull { it is Inet4Address && !it.isLoopbackAddress && !it.isLinkLocalAddress }
-            ?.hostAddress
-    }
-}.getOrNull()
+fun wifiIpv4(): String? = ipv4On {
+    it.startsWith("wlan") || it.startsWith("eth") || it.startsWith("ap") || it.startsWith("p2p")
+}
+
+/** 192.168.49.x 是 Wi-Fi Direct 组长的标准地址段。 */
+fun isP2pAddress(ip: String): Boolean =
+    ip.startsWith("192.168.49.") || ip == p2pIpv4()
 
 /** 计算本机各 IPv4 网卡对应的定向/子网广播地址（含 255.255.255.255）。 */
 private fun broadcastTargets(): List<InetAddress> {
@@ -154,7 +160,8 @@ class HostBeacon(
                     put("v", 1)
                     put("id", hostId)
                     put("name", hostName)
-                    put("ip", localIpv4() ?: "192.168.49.1")
+                    // 优先广播「路由器局域网」地址；直连模式下退到 p2p 地址
+                    put("ip", lanIpv4() ?: p2pIpv4() ?: localIpv4() ?: "192.168.49.1")
                     put("ctrl", ctrlPort)
                     put("ts", System.currentTimeMillis())
                 }.toString().toByteArray()

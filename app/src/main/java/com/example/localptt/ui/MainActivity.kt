@@ -1,11 +1,15 @@
 package com.example.localptt.ui
 
+import android.Manifest
 import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
+import android.content.pm.PackageManager
 import android.net.wifi.WifiManager
 import android.net.wifi.p2p.WifiP2pDevice
+import android.net.wifi.p2p.WifiP2pInfo
+import android.os.Build
 import android.os.Bundle
 import android.util.Log
 import android.view.View
@@ -14,6 +18,7 @@ import android.widget.EditText
 import android.widget.ListView
 import android.widget.TextView
 import android.widget.Toast
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AlertDialog
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.content.ContextCompat
@@ -28,15 +33,14 @@ import com.example.localptt.net.DiscoveryListener
 import com.example.localptt.net.WifiDirectManager
 import com.example.localptt.net.WifiGate
 import com.example.localptt.net.uid
+import com.example.localptt.room.ConnectMode
 import com.example.localptt.room.RoomManager
 import com.example.localptt.room.RoomState
-import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.launchIn
 import kotlinx.coroutines.flow.onEach
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.suspendCancellableCoroutine
-import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeoutOrNull
 import kotlin.coroutines.resume
 
@@ -89,6 +93,28 @@ class MainActivity : AppCompatActivity() {
     /** Wi-Fi 提示条（顶部那张橙色小卡）：Wi-Fi 没开时自动出现。 */
     private lateinit var wifiTip: View
     private lateinit var tvWifiTip: TextView
+    private lateinit var tvWifiFix: TextView
+
+    /** 当前互联方式小胶囊：🏠 路由器 / 📡 直连。 */
+    private lateinit var tvMode: TextView
+
+    /** 因缺少「附近设备 / 定位」权限而暂缓的操作：授权后自动接着做。 */
+    private var pendingPermissionAction: (() -> Unit)? = null
+
+    /**
+     * Wi-Fi Direct 运行时权限（Android 13+ 是 NEARBY_WIFI_DEVICES，之前是精确定位）。
+     * 没有这一步，discoverPeers / createGroup 会直接抛 SecurityException ——
+     * 这也是旧版「Wi-Fi 直连形同虚设」的根因。
+     */
+    private val p2pPermissionLauncher = registerForActivityResult(
+        ActivityResultContracts.RequestMultiplePermissions()
+    ) { result ->
+        val granted = result.values.all { it }
+        if (!granted) toast("没给「附近的设备」权限，Wi-Fi 直连可能用不了哦")
+        val pending = pendingPermissionAction
+        pendingPermissionAction = null
+        pending?.invoke()
+    }
 
     /** 每个进程只自动回房一次，避免反复重连把界面压在「处理中」。 */
     private var autoRestoreTried = false
@@ -153,13 +179,16 @@ class MainActivity : AppCompatActivity() {
 
         wifiTip = findViewById(R.id.wifiTip)
         tvWifiTip = findViewById(R.id.tvWifiTip)
+        tvWifiFix = findViewById(R.id.tvWifiFix)
+        tvMode = findViewById(R.id.tvMode)
     }
 
     /**
-     * 开房/找小伙伴**不再要求任何运行时权限**（历史 Bug 之一）：
-     * 过去首页一次性索要麦克风+相机+定位，任意一项被拒就走不到开房这一步，
-     * 在三星等定制系统上尤其容易被拦。麦克风交给语音页要、相机交给视频页要，
-     * 按需索取，被拒也只影响那一个功能。
+     * 首页点击绑定。
+     *
+     * 麦克风/相机仍按需向语音页、视频页要；这里只额外要一个「附近的设备 / 定位」权限 ——
+     * Wi-Fi Direct 建组与扫描需要它，且**只在用户点开房/找小伙伴时才要**，
+     * 不授权也还能走同一个路由器（UDP 广播 / mDNS）这条路。
      */
     private fun bindClicks() {
         findViewById<View>(R.id.btnProfile).setOnClickListener {
@@ -202,6 +231,10 @@ class MainActivity : AppCompatActivity() {
             .onEach { renderForState(it) }
             .launchIn(lifecycleScope)
 
+        RoomManager.mode
+            .onEach { renderMode(it) }
+            .launchIn(lifecycleScope)
+
         // 功能同步：一台进入，房间里的小伙伴一起进入
         lifecycleScope.launch {
             AppBus.featureEvents.collect { s ->
@@ -223,6 +256,20 @@ class MainActivity : AppCompatActivity() {
 
         val inRoom = s.inRoom
         listOf(btnVoice, btnVideo, btnChat, btnGame).forEach { it.alpha = if (inRoom) 1f else 0.5f }
+    }
+
+    /**
+     * 互联方式小胶囊：让用户一眼看清「这次是靠路由器还是靠直连」。
+     * 也为排障省事 —— 连不上时先看这里是不是和自己以为的方式不一样。
+     */
+    private fun renderMode(m: ConnectMode) {
+        val text = when (m) {
+            ConnectMode.LAN -> "🌐 同一个 WiFi"
+            ConnectMode.DIRECT -> "📡 WiFi 直连"
+            ConnectMode.NONE -> ""
+        }
+        tvMode.text = text
+        tvMode.visibility = if (text.isEmpty()) View.GONE else View.VISIBLE
     }
 
     override fun onStart() {
@@ -256,7 +303,8 @@ class MainActivity : AppCompatActivity() {
     private fun maybeAutoRestore() {
         // 正在处理 Wi-Fi 门禁时不要插队，否则两个 join 会互相把对方挡掉
         if (pendingWifiAction != null || awaitingWifi) return
-        if (!WifiGate.isReady(this)) return
+        // 只要求 Wi-Fi 开关打开：没有路由器时上一次的直连房间也可能还在
+        if (!WifiGate.isWifiOn(this)) return
         if (autoRestoreTried) return
         if (RoomManager.state.value.inRoom || RoomManager.state.value.busy) return
         val saved = RoomManager.rememberedRoom(this) ?: return
@@ -322,7 +370,7 @@ class MainActivity : AppCompatActivity() {
             RoomManager.state.value.busy -> {
                 toast("⏳ 正在忙上一步。想立刻重来，点「🚪 重新开始」")
             }
-            else -> ensureWifi { actuallyCreateRoom() }
+            else -> withP2pPermission { ensureWifi { actuallyCreateRoom() } }
         }
     }
 
@@ -331,14 +379,50 @@ class MainActivity : AppCompatActivity() {
         RoomManager.createRoom(this)
     }
 
-    /** 「找小伙伴」同样需要先有 Wi-Fi，否则扫描注定一无所获。 */
-    private fun joinRoom() = ensureWifi { showNearbyHostsDialog() }
+    /**
+     * 「找小伙伴」：
+     *  - 同一个路由器 → UDP 广播 + mDNS 自动发现；
+     *  - 没有路由器 → Wi-Fi Direct 扫描附近开好直连房间的设备。
+     * 权限被拒也照样把弹窗打开（局域网那条路不需要权限），只是直连设备少一些。
+     */
+    private fun joinRoom() = ensureWifi { withP2pPermission { showNearbyHostsDialog() } }
+
+    // ---------- Wi-Fi Direct 运行时权限 ----------
+
+    /** 需要的权限：Android 13+ 是「附近的设备」，更早的系统要求精确定位。 */
+    private fun p2pPermissions(): Array<String> =
+        if (Build.VERSION.SDK_INT >= 33) {
+            arrayOf(Manifest.permission.NEARBY_WIFI_DEVICES)
+        } else {
+            arrayOf(Manifest.permission.ACCESS_FINE_LOCATION)
+        }
+
+    private fun hasP2pPermission(): Boolean = p2pPermissions().all {
+        ContextCompat.checkSelfPermission(this, it) == PackageManager.PERMISSION_GRANTED
+    }
+
+    /**
+     * 有权限就直接做；没有就先申请，用户无论同意还是拒绝，最后都会继续执行 [then]。
+     * （局域网互联不依赖该权限，不该因为拒权就把用户挡在门外。）
+     */
+    private fun withP2pPermission(then: () -> Unit) {
+        if (hasP2pPermission()) { then(); return }
+        pendingPermissionAction = then
+        runCatching { p2pPermissionLauncher.launch(p2pPermissions()) }
+            .onFailure {
+                // 极端机型上 launcher 不可用：不阻塞主流程
+                pendingPermissionAction = null
+                then()
+            }
+    }
 
     // ---------- Wi-Fi 门禁：没开就提示，能开就自动开 ----------
 
     /**
-     * 做事之前先确认 Wi-Fi 可用。没有这一层，用户忘开 Wi-Fi 时只会看到 15 秒转圈后失败，
-     * 完全不知道原因。
+     * 做事之前先确认 **Wi-Fi 开关是打开的**。
+     *
+     * ★ 这里只检查开关，不要求「连上路由器」：没有路由器时两台手机可以走 Wi-Fi Direct
+     *   直连，旧版在这里用 `isReady` 一刀切，直接让直连永远走不到（核心 Bug）。
      *
      * - Android 9 及以下：[WifiGate.tryEnable] 可以**直接替用户打开**，全程无感知；
      * - Android 10 起：系统禁止第三方开关 Wi-Fi，改弹提示 + 拉系统 Wi-Fi 面板，
@@ -347,7 +431,7 @@ class MainActivity : AppCompatActivity() {
     private fun ensureWifi(then: () -> Unit) {
         if (awaitingWifi) { toast("⏳ 正在等 Wi-Fi 打开…"); return }
         pendingWifiAction = null
-        if (WifiGate.isReady(this)) { then(); return }
+        if (WifiGate.isWifiOn(this)) { then(); return }
 
         pendingWifiAction = then
         if (WifiGate.tryEnable(this)) {
@@ -355,9 +439,7 @@ class MainActivity : AppCompatActivity() {
             waitForWifiThenRun()
             return
         }
-        promptEnableWifi(
-            if (WifiGate.isWifiOn(this)) "Wi-Fi 开了，但还没连上网络" else "Wi-Fi 还是关着的哦"
-        )
+        promptEnableWifi("Wi-Fi 还是关着的哦")
     }
 
     /** 童趣提示弹窗：说明为什么要 Wi-Fi，并给一条最短的操作路径。 */
@@ -376,14 +458,14 @@ class MainActivity : AppCompatActivity() {
     }
 
     /**
-     * 等 Wi-Fi 真正就绪再继续（面板关闭时需要轮询，因为拿到 IP 比开关晚几秒）。
+     * 等 Wi-Fi 开关真正打开再继续（面板关闭时需轮询，系统打开开关比 UI 慢半拍）。
      * 等待**一定有时间上限**，超时也照样执行：失败信息由 RoomManager 给出，不让用户干等。
      */
     private fun waitForWifiThenRun() {
         if (pendingWifiAction == null || awaitingWifi) return
         awaitingWifi = true
         lifecycleScope.launch {
-            val ready = WifiGate.awaitReady(this@MainActivity, 12_000)
+            val ready = WifiGate.awaitWifiOn(this@MainActivity, 12_000)
             awaitingWifi = false
             val pending = pendingWifiAction ?: return@launch
             pendingWifiAction = null
@@ -400,23 +482,32 @@ class MainActivity : AppCompatActivity() {
      * Android 10 起系统不允许，这里什么都不做，由提示条引导用户一键打开。
      */
     private fun autoEnableWifiOnLaunch() {
-        if (WifiGate.isReady(this)) return
+        if (WifiGate.isWifiOn(this)) return
         if (!WifiGate.tryEnable(this)) return
         lifecycleScope.launch {
-            WifiGate.awaitReady(this@MainActivity, 8_000)
+            WifiGate.awaitWifiOn(this@MainActivity, 8_000)
             refreshWifiTip()
-            if (WifiGate.isReady(this@MainActivity)) toast("📶 已经帮你打开 Wi-Fi 啦")
+            if (WifiGate.isWifiOn(this@MainActivity)) toast("📶 已经帮你打开 Wi-Fi 啦")
         }
     }
 
-    /** 首页橙色提示条：Wi-Fi 不可用时永远能看到，点旁边的按钮就能去打开。 */
+    /**
+     * 首页橙色提示条：只在**Wi-Fi 关着**或**没连路由器**时出现。
+     * 后者的文案要说清「也能直连」，否则用户会以为自己必须去连一个路由器。
+     */
     private fun refreshWifiTip() {
-        val ready = WifiGate.isReady(this)
-        wifiTip.visibility = if (ready) View.GONE else View.VISIBLE
-        tvWifiTip.text = when (WifiGate.status(this)) {
-            WifiGate.Status.OK -> ""
-            WifiGate.Status.WIFI_OFF -> "Wi-Fi 还没打开哦"
-            WifiGate.Status.NO_LAN -> "Wi-Fi 开了，但还没连上网络"
+        val st = WifiGate.status(this)
+        wifiTip.visibility = if (st == WifiGate.Status.OK) View.GONE else View.VISIBLE
+        when (st) {
+            WifiGate.Status.WIFI_OFF -> {
+                tvWifiTip.text = "Wi-Fi 还没打开哦"
+                tvWifiFix.text = "去打开"
+            }
+            WifiGate.Status.NO_LAN -> {
+                tvWifiTip.text = "没连路由器？两台手机也能直连"
+                tvWifiFix.text = "连 WiFi"
+            }
+            WifiGate.Status.OK -> tvWifiTip.text = ""
         }
     }
 
@@ -450,6 +541,8 @@ class MainActivity : AppCompatActivity() {
                 nearbyAdapter = null
                 try { AppBus.discovery?.stop() } catch (_: Throwable) {}
                 AppBus.discovery = null
+                // 直连扫描的接收器是常驻的，必须在这里显式注销，否则会一直泄漏
+                runCatching { p2p?.stopDiscovery() }
             }
             .create()
         nearbyDialog?.show()
@@ -464,6 +557,10 @@ class MainActivity : AppCompatActivity() {
 
         // 2) Wi-Fi Direct 原生发现：无路由器场景的补充。权限不足/不支持时静默降级，
         //    绝不影响上面两条通道（过去这里失败会让整个「找小伙伴」看起来没反应）。
+        if (!hasP2pPermission()) {
+            Log.i("LocalPTT", "没有附近设备权限，跳过 Wi-Fi Direct 扫描（局域网发现照常）")
+            return
+        }
         lifecycleScope.launch {
             val devices = withTimeoutOrNull(10_000) { discoverP2pDevices() }
             if (!devices.isNullOrEmpty()) {
@@ -536,37 +633,62 @@ class MainActivity : AppCompatActivity() {
             .show()
     }
 
-    /** 走 Wi-Fi Direct 直连：先 P2P 连上，拿到组长 IP 再按普通流程进房间。 */
+    /**
+     * 走 Wi-Fi Direct 直连：先 P2P 连上，拿到组长 IP 再按普通流程进房间。
+     *
+     * ★ 关键点
+     *  1. `viaP2p = true`：RoomManager 收尾时**不能**拆掉这个刚建好的 P2P 组；
+     *  2. 如果协商结果自己成了组长（对端没抢到），组长地址是 192.168.49.1，
+     *     但房间主机在对端 —— 这时连过去必然失败，直接给出可读提示，避免白等 15 秒；
+     *  3. 不把正在发现的接收器留着：连上之后就停掉扫描，省电也避免列表乱跳。
+     */
     private fun joinP2pPeer(dev: WifiP2pDevice?) {
         val d = dev ?: return
         lifecycleScope.launch {
-            status.text = "🔍 正在连 ${d.deviceName} …"
+            status.text = "🔍 正在直连 ${d.deviceName.ifBlank { d.deviceAddress }} …"
             val mgr = p2p ?: runCatching { WifiDirectManager(this@MainActivity) }.getOrNull()
             if (mgr == null) {
                 status.text = "😵 这台手机不支持 Wi-Fi 直连，试试连同一个 Wi-Fi"
                 return@launch
             }
             p2p = mgr
-            val connected = withTimeoutOrNull(12_000) {
+            AppBus.p2p = mgr
+            runCatching { mgr.stopDiscovery() }
+
+            val connected = withTimeoutOrNull(20_000) {
                 suspendCancellableCoroutine<Boolean> { cont ->
                     fun end(ok: Boolean) { if (cont.isActive) cont.resume(ok) }
                     runCatching { mgr.discoverAndConnect(d) { end(it) } }.onFailure { end(false) }
                 }
             } ?: false
             if (!connected) {
-                status.text = "😵 连不上，再点一次试试"
+                status.text = "😵 直连连不上，再点一次试试；也可以两台手机连同一个 Wi-Fi"
                 return@launch
             }
             delay(800)
-            val ip = withTimeoutOrNull(6_000) {
-                suspendCancellableCoroutine<String?> { cont ->
-                    fun end(v: String?) { if (cont.isActive) cont.resume(v) }
+
+            // 协商完成后才知道谁是组长，以及组长地址是什么
+            val info = withTimeoutOrNull(8_000) {
+                suspendCancellableCoroutine<WifiP2pInfo?> { cont ->
                     runCatching {
-                        mgr.requestConnectionInfo { ok, info -> end(if (ok) info?.groupOwnerAddress?.hostAddress else null) }
-                    }.onFailure { end(null) }
+                        mgr.requestConnectionInfo { ok, i ->
+                            if (cont.isActive) cont.resume(if (ok) i else null)
+                        }
+                    }.onFailure { if (cont.isActive) cont.resume(null) }
                 }
-            } ?: "192.168.49.1"
-            RoomManager.joinRoom(this@MainActivity, ip, 8888, d.deviceName)
+            }
+            if (info?.isGroupOwner == true) {
+                // 自己成了组长：说明对端不在 / 协商失败，房间主机不在本机，连进去不可能成功
+                status.text = "😵 直连没谈成（自己成了组长）。请让开房间的那台手机再点一次「🏠 开个房间」"
+                runCatching { mgr.removeGroup() }
+                AppBus.p2p = null
+                return@launch
+            }
+            val ip = info?.groupOwnerAddress?.hostAddress ?: "192.168.49.1"
+            status.text = "📡 直连成功（组长 $ip），正在进房间…"
+            RoomManager.joinRoom(
+                this@MainActivity, ip, 8888, d.deviceName, viaP2p = true
+            )
         }
     }
 

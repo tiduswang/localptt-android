@@ -2,6 +2,53 @@
 
 本项目遵循 [语义化版本](https://semver.org/lang/zh-CN/) 与 Keep a Changelog 风格。
 
+## [1.2.0] - 2026-10-26
+
+**两种互联方式全部打通**：同一路由器（LAN）与没有路由器（Wi-Fi Direct 直连）都能互联，
+并补上 Wi-Fi Direct 一直缺失的运行时权限、组长地址公布与端口同步。
+
+### 新增（Added）
+- **`ConnectMode`（`NONE / LAN / DIRECT`）**：`RoomManager` 新增 `mode: StateFlow<ConnectMode>`，
+  首页状态卡下方以 `🌐 同一个 WiFi` / `📡 WiFi 直连` 小胶囊展示本次是通过什么链路连上的。
+- **Wi-Fi Direct 运行时权限**（`MainActivity`）：
+  - Android 13+ 申请 `NEARBY_WIFI_DEVICES`，Android 12 及以下申请 `ACCESS_FINE_LOCATION`；
+  - 使用 `ActivityResultContracts.RequestMultiplePermissions`；**只在点开房/找小伙伴时申请**；
+  - 拒绝授权不阻塞局域网路径，只影响直连扫描。
+- **开房自动建组**：没有路由器局域网（`lanIpv4() == null`）时，`doCreateRoom()` 自动
+  `createGroup` 成为组长，并把真实组长地址公布给对端（`ControlServer.advertisedIp`）。
+- **设备可见名**：Android 10+ 用 `WifiP2pManager.setDeviceName("PTT-昵称")`，
+  对端在「Wi-Fi 直连」列表里能直接认出是谁开的房间。
+- **语音端口随信令同步**：`Hello` / `Peer` / `PeerList` 增加 `voicePort`，
+  `UdpBus` 用整表替换维护「对端 IP + 实际语音端口」，修复 5004 被占用后对端听不到声音的问题。
+- **`WifiGate.awaitWifiOn()`**：门禁改为只等「Wi-Fi 开关打开」，不再要求必须连上路由器。
+- **`.github/workflows/build.yml`**：GitHub Actions 自动构建 debug APK（README 徽章对应）。
+
+### 变更（Changed）
+- **Wi-Fi 门禁语义**：`ensureWifi()` 由「必须有局域网」改为「只要有 Wi-Fi 开关」；
+  `WifiGate.tryEnable()` 同步调整。旧版正是因为在 `NO_LAN` 就直接失败，导致直连永远走不到。
+- **`WifiDirectManager`**：
+  - `discoverPeers()` 改为**常驻接收器 + 持续刷新**，新增 `stopDiscovery()` 统一注销，不再泄漏 receiver；
+  - `discoverAndConnect()` 增加版本分支：API 29+ 用 `WifiP2pConfig.Builder` 强制 2.4GHz、
+    `groupOwnerIntent = 0`（让开房方当组长），旧系统用兼容构造器。
+- **`AppBus.reset()` 不再拆 P2P 组**：改由 `RoomManager.cleanup(skipP2p)` 按模式决定，
+  避免客户端刚连上组长就自己把组拆了。
+- **超时调整**：开房 15s → **25s**（含建组），加入 15s，P2P 建组 **14s**。
+- **首页文案与界面**：提示条区分「Wi-Fi 没打开」与「没连路由器（也能直连）」；
+  底部小提示补充直连用法。
+
+### 修复（Fixed）
+- **Wi-Fi Direct 一直不可用的组合根因**：
+  1. 从未在运行时申请权限 → `createGroup` / `discoverPeers` 直接 `SecurityException`；
+  2. 无局域网被 `ensureWifiReady` 一票否决 → 建组路径根本不可达；
+  3. 建组后仍对外公布 wlan/127.0.0.1 地址 → 对端 TCP 连不进来；
+  4. 直连加入时 `cleanup()` 无条件 `removeGroup()` → 把刚协商好的组拆掉。
+- **`IP` 判定拆分为 `lanIpv4()` / `p2pIpv4()` / `wifiIpv4()`**：
+  组网模式、对外公布地址、语音文件 URL 各取所需，不再把 4G 地址误当局域网。
+- **`UdpBus` 目标表改为 `IP → 端口` 映射**：成员离开/端口变化时整表替换，不再残留幽灵目标。
+- **自己意外成为组长时立即提示**：不再拿着 `192.168.49.1` 去连对端并白等超时。
+
+---
+
 ## [1.1.1] - 2026-10-26
 
 **忘记开 Wi-Fi 不再只是「转圈后失败」**：新增 Wi-Fi 门禁，没开先提示、能开就自动开。

@@ -94,14 +94,38 @@
                     android:layout_width="wrap_content"
                     android:layout_height="wrap_content" />
 
-                <TextView
-                    android:id="@+id/status"
-                    android:text="还没有连上小伙伴哦"
-                    android:textSize="15sp"
-                    android:textColor="@color/kids_text"
+                <LinearLayout
+                    android:orientation="vertical"
                     android:layout_marginStart="10dp"
-                    android:layout_width="match_parent"
-                    android:layout_height="wrap_content" />
+                    android:layout_weight="1"
+                    android:layout_width="0dp"
+                    android:layout_height="wrap_content">
+
+                    <TextView
+                        android:id="@+id/status"
+                        android:text="还没有连上小伙伴哦"
+                        android:textSize="15sp"
+                        android:textColor="@color/kids_text"
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content" />
+
+                    <!-- 互联方式小胶囊：🌐 同一个 WiFi / 📡 WiFi 直连；未连上时隐藏 -->
+                    <TextView
+                        android:id="@+id/tvMode"
+                        android:visibility="gone"
+                        android:text="🌐 同一个 WiFi"
+                        android:textSize="11sp"
+                        android:textStyle="bold"
+                        android:textColor="#FFFFFF"
+                        android:background="@drawable/shape_pill_blue"
+                        android:paddingStart="10dp"
+                        android:paddingEnd="10dp"
+                        android:paddingTop="3dp"
+                        android:paddingBottom="3dp"
+                        android:layout_marginTop="6dp"
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content" />
+                </LinearLayout>
             </LinearLayout>
         </FrameLayout>
 
@@ -145,7 +169,7 @@
                         android:layout_height="wrap_content" />
 
                     <TextView
-                        android:text="小伙伴之间要靠 Wi-Fi 才能说话～"
+                        android:text="没有路由器也能两台手机直连～"
                         android:textSize="12sp"
                         android:textColor="@color/kids_text_sub"
                         android:layout_marginTop="2dp"
@@ -167,6 +191,7 @@
                     android:layout_height="wrap_content">
 
                     <TextView
+                        android:id="@+id/tvWifiFix"
                         android:text="去打开"
                         android:textSize="14sp"
                         android:textStyle="bold"
@@ -501,7 +526,7 @@
         </LinearLayout>
 
         <TextView
-            android:text="小提示：一台手机点「开个房间」，其他手机点「找小伙伴」就能自动连上 😊"
+            android:text="小提示：连同一个 Wi-Fi 会自动发现；没有路由器时，一台点「开个房间」，另一台在「找小伙伴」里选「Wi-Fi 直连」的设备也能连上 😊"
             android:textSize="12sp"
             android:textColor="@color/kids_text_sub"
             android:gravity="center"

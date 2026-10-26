@@ -22,6 +22,9 @@ class UdpBus(
     /** 实际绑定的接收端口（可能与约定端口不同）。 */
     @Volatile private var rxPort: Int = port
 
+    /** 对外公布本机实际语音端口，随 Hello/PeerList 同步给对端。 */
+    val actualPort: Int get() = rxPort
+
     private val socket: DatagramSocket? = openUdpSocket(port) { rxPort = it }
     private val scope = netScope()
 
@@ -32,11 +35,24 @@ class UdpBus(
         kotlinx.coroutines.channels.Channel.UNLIMITED
     )
 
-    private val targets = mutableSetOf<InetAddress>()
+    /** 目标地址 → 对端语音端口。整表替换，成员离开时不会残留幽灵目标。 */
+    private val targets = mutableMapOf<InetAddress, Int>()
 
-    fun addTarget(ip: String) {
-        runCatching { InetAddress.getByName(ip) }
-            .onSuccess { synchronized(targets) { targets.add(it) } }
+    /**
+     * 用最新在线名单整体替换语音发送目标。
+     * 每个成员携带自己的 voicePort（5004 被占用时会顺延），避免固定端口错配导致听不到。
+     */
+    fun setTargets(list: List<Pair<String, Int>>) {
+        val resolved = LinkedHashMap<InetAddress, Int>()
+        list.forEach { (ip, p) ->
+            if (ip.isBlank()) return@forEach
+            runCatching { InetAddress.getByName(ip) }
+                .onSuccess { resolved[it] = p.coerceIn(1, 65535) }
+        }
+        synchronized(targets) {
+            targets.clear()
+            targets.putAll(resolved)
+        }
     }
 
     fun startReceiving() = scope.launch {
@@ -65,9 +81,9 @@ class UdpBus(
             this[9] = (seq shr 8 and 0xFF).toByte()
         }
         val frame = header + payload
-        val snapshot = synchronized(targets) { targets.toList() }
-        for (t in snapshot) {
-            runCatching { s.send(DatagramPacket(frame, frame.size, t, port)) }
+        val snapshot = synchronized(targets) { targets.entries.map { it.key to it.value } }
+        for ((addr, targetPort) in snapshot) {
+            runCatching { s.send(DatagramPacket(frame, frame.size, addr, targetPort)) }
         }
     }
 

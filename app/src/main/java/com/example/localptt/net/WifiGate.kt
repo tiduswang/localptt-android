@@ -37,7 +37,10 @@ object WifiGate {
         /** Wi-Fi 开关是关的：必须先把开关打开。 */
         WIFI_OFF,
 
-        /** 开关开着但还没连上任何网络（正在获取 IP / 开了却没连接）：再等等或连一个 Wi-Fi。 */
+        /**
+         * 开关开着但还没连上路由器：**不影响使用**，可以走 Wi-Fi Direct 直连，
+         * 只是自动发现会从「UDP 广播」换成「Wi-Fi 直连扫描」。
+         */
         NO_LAN
     }
 
@@ -70,7 +73,8 @@ object WifiGate {
      */
     @Suppress("DEPRECATION") // API 29 起废弃：系统禁止第三方调用，但旧系统上这是唯一的自动手段
     fun tryEnable(ctx: Context): Boolean {
-        if (isReady(ctx)) return true
+        // 只要求「开关」：没连路由器时 App 走 Wi-Fi Direct，不需要局域网就绪
+        if (isWifiOn(ctx)) return true
         val wm = wifiManager(ctx) ?: return false
         val ok = runCatching { wm.setWifiEnabled(true) }.getOrDefault(false)
         if (ok) Log.i(TAG, "已自动打开 Wi-Fi（系统 API 允许）")
@@ -112,5 +116,21 @@ object WifiGate {
                 waited += step
             }
             isReady(ctx)
+        }
+
+    /**
+     * 只等「Wi-Fi 开关打开」，不要求连上路由器。
+     * 没有路由器时也能用 Wi-Fi Direct 直连，因此开房/找小伙伴的门槛只需要这一条。
+     */
+    suspend fun awaitWifiOn(ctx: Context, timeoutMs: Long = 8_000): Boolean =
+        withContext(Dispatchers.IO) {
+            val step = 300L
+            var waited = 0L
+            while (waited < timeoutMs) {
+                if (isWifiOn(ctx)) return@withContext true
+                delay(step)
+                waited += step
+            }
+            isWifiOn(ctx)
         }
 }
