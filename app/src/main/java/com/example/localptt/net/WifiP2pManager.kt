@@ -14,8 +14,12 @@ import android.os.Looper
 import android.util.Log
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.channels.awaitClose
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.callbackFlow
+import kotlinx.coroutines.suspendCancellableCoroutine
+import kotlinx.coroutines.withTimeoutOrNull
+import kotlin.coroutines.resume
 
 /**
  * 封装 Wi-Fi Direct（P2P）：一个节点建组成为 Group Owner(GO)，
@@ -138,6 +142,28 @@ class WifiDirectManager(private val ctx: Context) {
             m.requestConnectionInfo(c) { info -> cb(info?.groupFormed == true, info) }
         }.onFailure { cb(false, null) }
     }
+
+    /**
+     * 等 P2P 组**真正成形**（拿到组长地址）为止。
+     *
+     * ★ 「直连进不去房间」的主因：`connect()` 的 onSuccess 只代表系统受理了请求，
+     *   组通常还要 3~10 秒才成形；过去只 delay(800ms) 就查一次连接信息，
+     *   查不到就直接拿 192.168.49.1 去连 TCP —— 此刻对端 p2p 网卡还没起来，必然失败。
+     *
+     * @return 成形的连接信息；超时返回 null（调用方给出可读提示）。
+     */
+    suspend fun awaitGroupFormed(timeoutMs: Long = 20_000): WifiP2pInfo? =
+        withTimeoutOrNull(timeoutMs) {
+            var found: WifiP2pInfo? = null
+            while (found == null) {
+                val info = suspendCancellableCoroutine<WifiP2pInfo?> { cont ->
+                    requestConnectionInfo { _, i -> if (cont.isActive) cont.resume(i) }
+                }
+                if (info?.groupFormed == true && info.groupOwnerAddress != null) found = info
+                else delay(500)
+            }
+            found
+        }
 
     /** 监听本机 P2P 状态/连接变化（用于 UI 显示与断线重连）。 */
     fun events(): Flow<WifiP2pInfo?> = callbackFlow {

@@ -8,7 +8,6 @@ import android.content.IntentFilter
 import android.content.pm.PackageManager
 import android.net.wifi.WifiManager
 import android.net.wifi.p2p.WifiP2pDevice
-import android.net.wifi.p2p.WifiP2pInfo
 import android.os.Build
 import android.os.Bundle
 import android.util.Log
@@ -591,10 +590,22 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
+    /**
+     * 只有本应用开房时才会把设备名改成 `PTT-昵称`（Android 10+ 才有此能力）。
+     *
+     * ★ 不做这个过滤的后果：Wi-Fi Direct 扫描列出的是**附近所有**支持直连的设备
+     *   （邻居的手机、电视、打印机……），用户点了其中一个只会白等几十秒 —— 这就是
+     *   「列表里一堆别的设备名字、点了又进不去」的根因。
+     */
+    private fun isAppDirectPeer(dev: WifiP2pDevice): Boolean {
+        val n = dev.deviceName ?: return false
+        return n.trim().startsWith("PTT", ignoreCase = true)
+    }
+
     /** 合并三类来源并刷新列表（Wi-Fi Direct 设备无 IP，需点击后先建 P2P 连接）。 */
     private fun mergeAndRender(beaconHosts: List<DiscoveredHost>, p2pList: List<WifiP2pDevice>) {
         val merged = mutableListOf<DiscoveredHost>()
-        p2pList.forEach { dev ->
+        p2pList.filter { isAppDirectPeer(it) }.forEach { dev ->
             merged += DiscoveredHost(
                 id = "p2p_${dev.deviceAddress}",
                 name = dev.deviceName.ifEmpty { dev.deviceAddress },
@@ -612,10 +623,14 @@ class MainActivity : AppCompatActivity() {
         nearbyRows.addAll(merged.sortedBy { it.name })
         nearbyAdapter?.clear()
         if (merged.isEmpty()) {
-            nearbyAdapter?.add("🔍 正在找…还没找到\n请让小伙伴先点「🏠 开个房间」，并且连同一个 Wi-Fi")
+            nearbyAdapter?.add(
+                "🔍 正在找…还没找到\n" +
+                    "• 同一个 Wi-Fi：让小伙伴先点「🏠 开个房间」\n" +
+                    "• 没有路由器：对方会在「Wi-Fi 直连」里显示成「PTT-昵称」"
+            )
         } else {
             merged.sortedBy { it.name }.forEach { h ->
-                val label = if (h.ip.isEmpty()) "👆 点一下就连上" else "👆 点一下进房间"
+                val label = if (h.ip.isEmpty()) "📡 Wi-Fi 直连 · 点一下跳过路由器" else "🌐 同一个 Wi-Fi · 点一下进房间"
                 nearbyAdapter?.add("${h.name}\n$label")
             }
         }
@@ -665,26 +680,26 @@ class MainActivity : AppCompatActivity() {
                 status.text = "😵 直连连不上，再点一次试试；也可以两台手机连同一个 Wi-Fi"
                 return@launch
             }
-            delay(800)
 
-            // 协商完成后才知道谁是组长，以及组长地址是什么
-            val info = withTimeoutOrNull(8_000) {
-                suspendCancellableCoroutine<WifiP2pInfo?> { cont ->
-                    runCatching {
-                        mgr.requestConnectionInfo { ok, i ->
-                            if (cont.isActive) cont.resume(if (ok) i else null)
-                        }
-                    }.onFailure { if (cont.isActive) cont.resume(null) }
-                }
+            // ★ 关键：connect() 的 onSuccess 只代表系统受理了请求，P2P 组还要 3~10 秒才成形。
+            //   过去这里只等 800ms 就查连接信息，查不到便拿 192.168.49.1 硬连 TCP，
+            //   此刻对端 p2p 网卡还没起来 —— 这就是「直连进不去房间」的直接原因。
+            status.text = "📡 直连请求已发出，正在等系统建组…"
+            val info = mgr.awaitGroupFormed(20_000)
+            if (info == null) {
+                status.text = "😵 直连组没建起来。请让开房间的那台手机再点一次「🏠 开个房间」"
+                runCatching { mgr.removeGroup() }
+                AppBus.p2p = null
+                return@launch
             }
-            if (info?.isGroupOwner == true) {
+            if (info.isGroupOwner) {
                 // 自己成了组长：说明对端不在 / 协商失败，房间主机不在本机，连进去不可能成功
                 status.text = "😵 直连没谈成（自己成了组长）。请让开房间的那台手机再点一次「🏠 开个房间」"
                 runCatching { mgr.removeGroup() }
                 AppBus.p2p = null
                 return@launch
             }
-            val ip = info?.groupOwnerAddress?.hostAddress ?: "192.168.49.1"
+            val ip = info.groupOwnerAddress?.hostAddress ?: "192.168.49.1"
             status.text = "📡 直连成功（组长 $ip），正在进房间…"
             RoomManager.joinRoom(
                 this@MainActivity, ip, 8888, d.deviceName, viaP2p = true

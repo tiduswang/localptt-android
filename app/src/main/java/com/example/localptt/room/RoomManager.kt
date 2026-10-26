@@ -442,7 +442,21 @@ object RoomManager {
         val confirmed = CompletableDeferred<Boolean>()
         client.connect(
             onReady = { ok -> if (generation.get() == g) confirmed.complete(ok) },
-            onLost = { if (generation.get() == g) scope.launch { handleLost(app) } }
+            onLost = { if (generation.get() == g) scope.launch { handleLost(app) } },
+            // 把「卡在哪一步」直接显示给用户：一直停在连接 → 网络层不通；
+            // 变成「等主机确认」→ TCP 已通，问题在主机侧/协议侧。
+            onPhase = { phase ->
+                if (generation.get() == g) {
+                    scope.launch {
+                        when (phase) {
+                            "connecting" -> setStatus(
+                                "⏳ 正在连接 $ip:$port（${if (direct) "Wi-Fi 直连" else "同一个 Wi-Fi"}）…"
+                            )
+                            "connected" -> setStatus("📨 已经连上 $ip，正在等主机确认…")
+                        }
+                    }
+                }
+            }
         )
 
         val ok = withTimeoutOrNull(JOIN_TIMEOUT_MS) { confirmed.await() } ?: false
@@ -450,7 +464,12 @@ object RoomManager {
         if (!ok) {
             runCatching { client.disconnect() }
             AppBus.client = null
-            throw IllegalStateException("$label 没有回应（连不上 $ip:$port）")
+            throw IllegalStateException(
+                "$label 没有回应（连不上 $ip:$port）\n" + if (direct)
+                    "确认开房的那台手机还在「房间里」，然后再点一次"
+                else
+                    "如果是同一个 Wi-Fi 还连不上，可能路由器开了「AP 隔离」，可改用「Wi-Fi 直连」"
+            )
         }
 
         if (remember) prefs(app).edit().putString(KEY_LAST_HOST, "$ip:$port").apply()

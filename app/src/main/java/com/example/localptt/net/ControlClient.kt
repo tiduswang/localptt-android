@@ -61,28 +61,58 @@ class ControlClient(
          *   期间上层一直停留在「正在处理中」——用户看到的就是 App 卡死。
          *   有超时后，最坏情况 3s 返回失败，UI 立刻可再次操作。
          */
+        /**
+         * 建连重试次数与间隔。
+         *
+         * 直连（Wi-Fi Direct）刚成组时，对端的 p2p 网卡/监听可能还差几百毫秒才就绪，
+         * 一次失败就宣告「进不去」太武断；换新 socket 重试几次能把这类瞬态失败吃掉。
+         */
         private const val CONNECT_TIMEOUT_MS = 3000
+        private const val CONNECT_RETRIES = 3
+        private const val CONNECT_RETRY_DELAY = 900L
     }
 
     /**
-     * @param onReady 互联确认结果（true=主机已确认你在房间里）
-     * @param onLost  已连接后又断开（主机退出 / Wi-Fi 中断）
+     * @param onReady   互联确认结果（true=主机已确认你在房间里）
+     * @param onLost    已连接后又断开（主机退出 / Wi-Fi 中断）
+     * @param onPhase   连接阶段变化（"connecting" / "connected"），供 UI 显示「卡在哪一步」
      */
-    fun connect(onReady: (Boolean) -> Unit, onLost: () -> Unit = {}) {
+    fun connect(
+        onReady: (Boolean) -> Unit,
+        onLost: () -> Unit = {},
+        onPhase: (String) -> Unit = {}
+    ) {
         readyFired = false
         lostFired = false
+        runCatching { onPhase("connecting") }
         scope.launch {
             var confirmed = false
-            var s: Socket? = null
+            var established: Socket? = null
             try {
-                s = Socket().apply {
-                    connect(java.net.InetSocketAddress(hostIp, port), CONNECT_TIMEOUT_MS)
-                    tcpNoDelay = true       // 信令是小包，禁用 Nagle 降低延迟
-                    keepAlive = true
+                var candidateOk: Socket? = null
+                var lastError: Throwable? = null
+                for (attempt in 1..CONNECT_RETRIES) {
+                    val candidate = Socket()
+                    val r = runCatching {
+                        candidate.connect(
+                            java.net.InetSocketAddress(hostIp, port), CONNECT_TIMEOUT_MS
+                        )
+                        candidate.tcpNoDelay = true       // 信令是小包，禁用 Nagle 降低延迟
+                        candidate.keepAlive = true
+                    }
+                    if (r.isSuccess) { candidateOk = candidate; break }
+                    lastError = r.exceptionOrNull()
+                    runCatching { candidate.close() }
+                    Log.w("LocalPTT", "第 $attempt 次连 $hostIp:$port 失败：${lastError?.message}")
+                    if (attempt < CONNECT_RETRIES) delay(CONNECT_RETRY_DELAY)
                 }
+                val s = candidateOk
+                    ?: throw (lastError ?: IllegalStateException("连接主机失败"))
+                established = s
                 sock = s
                 out = PrintWriter(s.getOutputStream(), true)
                 lastRecv = System.currentTimeMillis()
+                runCatching { onPhase("connected") }
                 send(Hello(myId, "all", uid(), myName, "client", myAvatar, voicePort))
 
                 // ① 超时未获主机确认 → 判失败
@@ -145,7 +175,7 @@ class ControlClient(
                 else fireLost(onLost)
             } finally {
                 connected = false
-                runCatching { s?.close() }
+                runCatching { established?.close() }
             }
         }
     }
