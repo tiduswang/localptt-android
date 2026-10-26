@@ -16,8 +16,8 @@
   - 拒绝授权不阻塞局域网路径，只影响直连扫描。
 - **开房自动建组**：没有路由器局域网（`lanIpv4() == null`）时，`doCreateRoom()` 自动
   `createGroup` 成为组长，并把真实组长地址公布给对端（`ControlServer.advertisedIp`）。
-- **设备可见名**：Android 10+ 用 `WifiP2pManager.setDeviceName("PTT-昵称")`，
-  对端在「Wi-Fi 直连」列表里能直接认出是谁开的房间。
+- **设备可见名**：Android 10+ 尝试用 `WifiP2pManager.setDeviceName("PTT-昵称")`（反射调用，
+  老 SDK 上不可直接引用），支持的系统里对端在「Wi-Fi 直连」列表能直接认出是谁开的房间。
 - **语音端口随信令同步**：`Hello` / `Peer` / `PeerList` 增加 `voicePort`，
   `UdpBus` 用整表替换维护「对端 IP + 实际语音端口」，修复 5004 被占用后对端听不到声音的问题。
 - **`WifiGate.awaitWifiOn()`**：门禁改为只等「Wi-Fi 开关打开」，不再要求必须连上路由器。
@@ -28,8 +28,9 @@
   `WifiGate.tryEnable()` 同步调整。旧版正是因为在 `NO_LAN` 就直接失败，导致直连永远走不到。
 - **`WifiDirectManager`**：
   - `discoverPeers()` 改为**常驻接收器 + 持续刷新**，新增 `stopDiscovery()` 统一注销，不再泄漏 receiver；
-  - `discoverAndConnect()` 增加版本分支：API 29+ 用 `WifiP2pConfig.Builder` 强制 2.4GHz、
-    `groupOwnerIntent = 0`（让开房方当组长），旧系统用兼容构造器。
+  - `discoverAndConnect()` 统一使用兼容构造器（`deviceAddress` + `groupOwnerIntent = 0`，
+    让开房方当组长）：新版 Builder 的「强制 2.4GHz」在部分 SDK 上无法直接引用，
+    为保证能编译、且频段不是必需项，这里走全版本通用写法。
 - **`AppBus.reset()` 不再拆 P2P 组**：改由 `RoomManager.cleanup(skipP2p)` 按模式决定，
   避免客户端刚连上组长就自己把组拆了。
 - **超时调整**：开房 15s → **25s**（含建组），加入 15s，P2P 建组 **14s**。
@@ -46,6 +47,11 @@
   组网模式、对外公布地址、语音文件 URL 各取所需，不再把 4G 地址误当局域网。
 - **`UdpBus` 目标表改为 `IP → 端口` 映射**：成员离开/端口变化时整表替换，不再残留幽灵目标。
 - **自己意外成为组长时立即提示**：不再拿着 `192.168.49.1` 去连对端并白等超时。
+- **构建链修复**：仓库内的 `gradle-wrapper.jar` 不完整（缺 `IDownload` 等类），
+  `./gradlew` 直接抛 `NoClassDefFoundError`；已替换为 Gradle 8.5 官方 wrapper，
+  CI（`.github/workflows/build.yml`）可正常 `assembleDebug` 并产出 APK。
+- **两处 P2P API 编译错误**：`setDeviceName` 与 `WifiP2pConfig.Builder#setGroupOwnerIntent`
+  在部分 SDK 上不可直接引用，前者改反射调用、后者改全版本通用的 `WifiP2pConfig()` 写法。
 
 ---
 
