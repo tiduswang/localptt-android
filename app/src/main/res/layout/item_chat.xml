@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="utf-8"?>
+<FrameLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent"
+    android:layout_height="wrap_content"
+    android:paddingHorizontal="10dp"
+    android:paddingVertical="5dp">
+
+    <TextView
+        android:id="@+id/tvBubble"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:maxWidth="270dp"
+        android:paddingHorizontal="14dp"
+        android:paddingVertical="10dp"
+        android:textSize="17sp"
+        android:lineSpacingExtra="2dp"
+        android:textColor="#3B2E22"
+        android:layout_gravity="start" />
+</FrameLayout>
