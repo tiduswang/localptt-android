@@ -305,7 +305,7 @@ class AudioEngine(
         handsFree = false
     }
 
-    private suspend fun captureLoop() {
+    private suspend fun CoroutineScope.captureLoop() {
         val pcm = ShortArray(frameSamples)
         while (isActive) {
             val n = runCatching { rec?.read(pcm, 0, frameSamples) ?: 0 }.getOrDefault(0)
