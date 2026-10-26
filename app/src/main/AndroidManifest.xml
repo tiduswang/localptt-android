@@ -61,7 +61,12 @@
         <activity android:name=".ui.ProfileActivity" android:exported="false" />
         <!-- 功能页用 singleTop：对端重复发「一起进来」时不会叠出一串同样的页面 -->
         <activity android:name=".ui.VoiceActivity" android:exported="false" android:launchMode="singleTop" />
-        <activity android:name=".ui.VideoActivity" android:exported="false" android:launchMode="singleTop" />
+        <!-- 视频页自己切横竖屏，必须阻止 Activity 重建（重建会重建相机/解码器、画面闪断） -->
+        <activity
+            android:name=".ui.VideoActivity"
+            android:exported="false"
+            android:launchMode="singleTop"
+            android:configChanges="orientation|screenSize|smallestScreenSize|keyboardHidden|screenLayout" />
         <activity android:name=".ui.ChatActivity" android:exported="false" android:launchMode="singleTop" />
         <activity android:name=".ui.GameActivity" android:exported="false" android:launchMode="singleTop" />
     </application>

@@ -1,12 +1,16 @@
 package com.example.localptt.ui
 
 import android.Manifest
+import android.content.pm.ActivityInfo
 import android.content.pm.PackageManager
+import android.graphics.SurfaceTexture
 import android.os.Bundle
-import android.view.SurfaceHolder
+import android.view.Gravity
 import android.view.TextureView
-import android.view.SurfaceView
 import android.view.View
+import android.view.ViewGroup
+import android.view.WindowManager
+import android.widget.FrameLayout
 import android.widget.TextView
 import android.widget.Toast
 import androidx.appcompat.app.AppCompatActivity
@@ -19,25 +23,37 @@ import com.example.localptt.audio.AudioEngine
 import com.example.localptt.data.Feature
 import com.example.localptt.data.VideoCall
 import com.example.localptt.video.VideoCallSession
-import kotlinx.coroutines.flow.receiveAsFlow
 import kotlinx.coroutines.launch
 
 /**
- * 视频对讲页：Camera2 本地预览 + H.264 编码经 RTP 发给对端；对端视频解码后渲染到 SurfaceView。
- * 通话期间同时开启 [AudioEngine] 免提双向语音（麦克风 + 扬声器）。
+ * 视频对讲页：Camera2 本地预览 + H.264 编码经 RTP 发给对端；对端视频解码后渲染到 TextureView。
+ * 通话期间同时开启 [AudioEngine] 免提双向语音（麦克风可手动开关）。
+ *
+ * ★ v1.3.2 画面方向与全屏：
+ *  - 远端画面改 TextureView（SurfaceView 不支持可靠的旋转/缩放），
+ *    「↻ 转画面」按 90° 循环，解决「一台横、一台竖」的画面方向不一致（选择会记住）；
+ *  - 「🔁 横屏/竖屏」手动切换页面方向；
+ *  - 「⛶ 全屏」沉浸式全屏（横屏、隐藏上下按钮栏），此时自己的画面缩成左上角画中画画中画；
+ *    点远端画面也可直接切全屏；
+ *  - 「🎤 麦克风」手动开关，关掉后不再把采集到的声音发给对方。
  *
  * ★ 历史 Bug 修复（「视频用不了，摄像头麦克风都没启用」）：
- *  1. Camera2/MediaCodec 需要两个 Surface 都就绪才能建会话，过去没等 SurfaceView 的
- *     holder 回调就 configure，直接抛异常 → 相机根本没打开；现在等两个 Surface 都就绪。
- *  2. 过去必须手动点「邀请」，且对端弹窗才接通，两端状态很容易对不上；
- *     现在**进入页面即自动呼叫**，收到邀请时若已在视频页就自动接通。
- *  3. 视频通话过去**完全没有声音**（只传画面）；现在叠加免提语音通道。
+ *  1. Camera2/MediaCodec 需要两个 Surface 都就绪才能建会话；现在等两个 Surface 都就绪。
+ *  2. 过去必须手动点「邀请」，且对端弹窗才接通；现在进入页面即自动呼叫。
+ *  3. 视频通话过去完全没有声音；现在叠加免提语音通道。
  */
 class VideoActivity : AppCompatActivity() {
 
     private lateinit var localPreview: TextureView
-    private lateinit var remoteView: SurfaceView
+    private lateinit var remoteView: TextureView
     private lateinit var tvStatus: TextView
+    private lateinit var videoStage: FrameLayout
+    private lateinit var localCard: FrameLayout
+    private lateinit var videoContent: View
+    private lateinit var btnRotate: TextView
+    private lateinit var btnOrientation: TextView
+    private lateinit var btnFullscreen: TextView
+    private lateinit var btnMic: TextView
 
     private var session: VideoCallSession? = null
     private var audio: AudioEngine? = null
@@ -53,6 +69,22 @@ class VideoActivity : AppCompatActivity() {
     /** 是否由对端同步关闭。 */
     private var closedByRemote = false
 
+    // ---------- 画面偏好（持久化） ----------
+
+    /** 画面旋转角度（0/90/180/270），两端各自保存自己的偏好。 */
+    private var videoRotation = 0
+
+    /** 是否横屏（手动切换的结果，退出全屏后恢复到这个状态）。 */
+    private var manualLandscape = false
+
+    /** 是否处于沉浸式全屏。 */
+    private var fullscreen = false
+
+    /** 麦克风是否打开（关掉后不把声音发给对方）。 */
+    private var micOn = true
+
+    private val prefs get() = getSharedPreferences("localptt", MODE_PRIVATE)
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         setContentView(R.layout.activity_video)
@@ -61,31 +93,61 @@ class VideoActivity : AppCompatActivity() {
         localPreview = findViewById(R.id.localPreview)
         remoteView = findViewById(R.id.remoteView)
         tvStatus = findViewById(R.id.tvVideoStatus)
+        videoStage = findViewById(R.id.videoStage)
+        localCard = findViewById(R.id.localCard)
+        videoContent = findViewById(R.id.videoContent)
+        btnRotate = findViewById(R.id.btnRotate)
+        btnOrientation = findViewById(R.id.btnOrientation)
+        btnFullscreen = findViewById(R.id.btnFullscreen)
+        btnMic = findViewById(R.id.btnMic)
+
+        videoRotation = prefs.getInt("videoRotation", 0)
+        manualLandscape = prefs.getBoolean("videoLandscape", false)
 
         findViewById<View>(R.id.btnVideoBack).setOnClickListener { finish() }
         findViewById<View>(R.id.btnInvite).setOnClickListener { inviteFirstPeer() }
+        btnRotate.setOnClickListener { rotateVideo() }
+        btnOrientation.setOnClickListener { toggleOrientation() }
+        btnFullscreen.setOnClickListener { setFullscreen(!fullscreen) }
+        btnMic.setOnClickListener { toggleMic() }
+        remoteView.setOnClickListener { setFullscreen(!fullscreen) }
 
         // ① 等两个 Surface 都就绪再建会话（Camera2 必须拿到有效 Surface）
         localPreview.surfaceTextureListener = object : TextureView.SurfaceTextureListener {
-            override fun onSurfaceTextureAvailable(st: android.graphics.SurfaceTexture, w: Int, h: Int) {
+            override fun onSurfaceTextureAvailable(st: SurfaceTexture, w: Int, h: Int) {
                 localReady = true
                 tryAttach()
             }
-            override fun onSurfaceTextureSizeChanged(st: android.graphics.SurfaceTexture, w: Int, h: Int) {}
-            override fun onSurfaceTextureDestroyed(st: android.graphics.SurfaceTexture): Boolean {
+            override fun onSurfaceTextureSizeChanged(st: SurfaceTexture, w: Int, h: Int) {}
+            override fun onSurfaceTextureDestroyed(st: SurfaceTexture): Boolean {
                 localReady = false
                 return true
             }
-            override fun onSurfaceTextureUpdated(st: android.graphics.SurfaceTexture) {}
+            override fun onSurfaceTextureUpdated(st: SurfaceTexture) {}
         }
         if (localPreview.isAvailable) localReady = true
 
-        remoteView.holder.addCallback(object : SurfaceHolder.Callback {
-            override fun surfaceCreated(h: SurfaceHolder) { remoteReady = true; tryAttach() }
-            override fun surfaceChanged(h: SurfaceHolder, f: Int, w: Int, h2: Int) {}
-            override fun surfaceDestroyed(h: SurfaceHolder) { remoteReady = false }
-        })
-        if (remoteView.holder.surface?.isValid == true) remoteReady = true
+        remoteView.surfaceTextureListener = object : TextureView.SurfaceTextureListener {
+            override fun onSurfaceTextureAvailable(st: SurfaceTexture, w: Int, h: Int) {
+                remoteReady = true
+                tryAttach()
+            }
+            override fun onSurfaceTextureSizeChanged(st: SurfaceTexture, w: Int, h: Int) {}
+            override fun onSurfaceTextureDestroyed(st: SurfaceTexture): Boolean {
+                // 远端 Surface 被系统回收：先停会话，重建后再接上（否则解码器往失效 Surface 写）
+                remoteReady = false
+                stopCall()
+                return true
+            }
+            override fun onSurfaceTextureUpdated(st: SurfaceTexture) {}
+        }
+        if (remoteView.isAvailable) remoteReady = true
+
+        // 尺寸变化（横竖屏切换）后重新计算旋转画面的布局尺寸
+        videoStage.addOnLayoutChangeListener { _, _, _, _, _, _, _, _, _ ->
+            fitRotatedRemote()
+            applyRotation()
+        }
 
         // ② 订阅来电
         lifecycleScope.launch {
@@ -105,6 +167,9 @@ class VideoActivity : AppCompatActivity() {
     override fun onStart() {
         super.onStart()
         resumed = true
+        applyOrientation()
+        applyRotation()
+        updateMicButton()
         ensureCameraPerm {
             val peer = AppBus.others.firstOrNull()
             if (peer == null) {
@@ -128,12 +193,140 @@ class VideoActivity : AppCompatActivity() {
         stopCall()
     }
 
+    override fun onConfigurationChanged(newConfig: android.content.res.Configuration) {
+        super.onConfigurationChanged(newConfig)
+        // 横竖屏切换不重建 Activity（见 manifest configChanges），这里重算画面尺寸
+        applyRotation()
+        if (fullscreen) hideSystemBars()
+    }
+
     override fun onDestroy() {
         super.onDestroy()
         if (AppBus.activeFeature == Feature.VIDEO) AppBus.activeFeature = null
         if (!closedByRemote) {
             runCatching { AppBus.postFeatureExit(Feature.VIDEO) }
         }
+    }
+
+    // ---------- 画面：转向 / 横竖屏 / 全屏 ----------
+
+    /** 「↻ 转画面」：0 -> 90 -> 180 -> 270 -> 0，两端画面方向保持一致，选择会记住。 */
+    private fun rotateVideo() {
+        videoRotation = (videoRotation + 90) % 360
+        prefs.edit().putInt("videoRotation", videoRotation).apply()
+        applyRotation()
+        toast("画面已旋转到 $videoRotation°")
+    }
+
+    /** 把旋转与「补齐尺寸」同时应用到两块画面：转 90/270 时宽高交换，否则会被裁掉。 */
+    private fun applyRotation() {
+        remoteView.rotation = videoRotation.toFloat()
+        localPreview.rotation = videoRotation.toFloat()
+        btnRotate.text = "↻ 转画面 ${videoRotation}°"
+
+        val landscapePic = videoRotation % 180 != 0
+        // 自己的小窗：转成横的画面时把小窗也改成横向比例，避免被裁
+        val lp = localCard.layoutParams as FrameLayout.LayoutParams
+        lp.width = dp(if (landscapePic) 148 else 104)
+        lp.height = dp(if (landscapePic) 104 else 148)
+        lp.gravity = Gravity.TOP or Gravity.START
+        localCard.layoutParams = lp
+        fitRotatedRemote()
+    }
+
+    /** 远端画面旋转 90/270 时要按舞台尺寸交换宽高，并居中，才能铺满不被裁。 */
+    private fun fitRotatedRemote() {
+        val lp = remoteView.layoutParams as FrameLayout.LayoutParams
+        val pw = videoStage.width
+        val ph = videoStage.height
+        if (videoRotation % 180 == 0 || pw <= 0 || ph <= 0) {
+            lp.width = ViewGroup.LayoutParams.MATCH_PARENT
+            lp.height = ViewGroup.LayoutParams.MATCH_PARENT
+        } else {
+            lp.width = ph
+            lp.height = pw
+        }
+        lp.gravity = Gravity.CENTER
+        remoteView.layoutParams = lp
+    }
+
+    /** 「🔁 横屏 / 竖屏」手动切换页面方向。 */
+    private fun toggleOrientation() {
+        manualLandscape = !manualLandscape
+        prefs.edit().putBoolean("videoLandscape", manualLandscape).apply()
+        if (!fullscreen) applyOrientation()
+        toast(if (manualLandscape) "已切到横屏" else "已切到竖屏")
+    }
+
+    private fun applyOrientation(forceLandscape: Boolean = false) {
+        val landscape = forceLandscape || manualLandscape
+        requestedOrientation = if (landscape) {
+            ActivityInfo.SCREEN_ORIENTATION_LANDSCAPE
+        } else {
+            ActivityInfo.SCREEN_ORIENTATION_PORTRAIT
+        }
+        btnOrientation.text = if (manualLandscape) "🔁 竖屏" else "🔁 横屏"
+    }
+
+    /**
+     * 全屏：沉浸式 + 横屏 + 隐藏顶部/底部按钮栏，自己的画面缩成左上角画中画。
+     * 点远端画面或「⤢ 退出全屏」可退出。
+     */
+    private fun setFullscreen(on: Boolean) {
+        if (fullscreen == on) return
+        fullscreen = on
+        findViewById<View>(R.id.videoTopBar).visibility = if (on) View.GONE else View.VISIBLE
+        findViewById<View>(R.id.videoBottomBar).visibility = if (on) View.GONE else View.VISIBLE
+        val pad = if (on) 0 else dp(12)
+        videoContent.setPadding(pad, pad, pad, pad)
+        (videoContent as? ViewGroup)?.setBackgroundColor(
+            if (on) 0xFF000000.toInt() else ContextCompat.getColor(this, R.color.kids_bg)
+        )
+        btnFullscreen.text = if (on) "⤢ 退出全屏" else "⛶ 全屏"
+        if (on) {
+            window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+            hideSystemBars()
+            applyOrientation(forceLandscape = true)
+        } else {
+            window.clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+            showSystemBars()
+            applyOrientation()
+        }
+    }
+
+    @Suppress("DEPRECATION")   // minSdk 24：systemUiVisibility 在 API 30 才被 WindowInsetsController 取代
+    private fun hideSystemBars() {
+        window.decorView.systemUiVisibility = (
+                View.SYSTEM_UI_FLAG_IMMERSIVE_STICKY
+                        or View.SYSTEM_UI_FLAG_FULLSCREEN
+                        or View.SYSTEM_UI_FLAG_LAYOUT_STABLE
+                        or View.SYSTEM_UI_FLAG_LAYOUT_FULLSCREEN
+                        or View.SYSTEM_UI_FLAG_HIDE_NAVIGATION
+                        or View.SYSTEM_UI_FLAG_LAYOUT_HIDE_NAVIGATION
+                )
+    }
+
+    @Suppress("DEPRECATION")
+    private fun showSystemBars() {
+        window.decorView.systemUiVisibility = View.SYSTEM_UI_FLAG_VISIBLE
+    }
+
+    // ---------- 麦克风 ----------
+
+    /** 手动开关麦克风：关掉后采集到的声音直接丢弃，对方听不见你（但还能听见对方）。 */
+    private fun toggleMic() {
+        micOn = !micOn
+        audio?.setMicMuted(!micOn)
+        updateMicButton()
+        toast(if (micOn) "麦克风已打开" else "麦克风已关闭，对方听不见你")
+    }
+
+    private fun updateMicButton() {
+        btnMic.text = if (micOn) "🎤 麦克风：开" else "🔇 麦克风：关"
+        btnMic.setBackgroundResource(
+            if (micOn) R.drawable.shape_pill_green else R.drawable.shape_pill_gray
+        )
+        btnMic.setTextColor(if (micOn) 0xFFFFFFFF.toInt() else 0xFF5A4A3A.toInt())
     }
 
     // ---------- 信令 ----------
@@ -213,11 +406,11 @@ class VideoActivity : AppCompatActivity() {
             android.util.Log.i("LocalPTT", "等待画面就绪 local=$localReady remote=$remoteReady")
             return
         }
-        val st = localPreview.surfaceTexture ?: return
-        val remote = remoteView.holder.surface
-        if (!remote.isValid) return
+        val localSt = localPreview.surfaceTexture ?: return
+        val remoteSt = remoteView.surfaceTexture ?: return
         try {
-            val preview = android.view.Surface(st)
+            val preview = android.view.Surface(localSt)
+            val remote = android.view.Surface(remoteSt)
             session = VideoCallSession(this, ip, preview, remote) { err ->
                 runOnUiThread {
                     toast(err)
@@ -225,7 +418,7 @@ class VideoActivity : AppCompatActivity() {
                 }
             }.also { it.start() }
             inCall = true
-            tvStatus.text = "📹 正在一起看～（麦克风已开）"
+            tvStatus.text = if (micOn) "📹 正在一起看～（麦克风已开）" else "📹 正在一起看～（麦克风已关）"
         } catch (e: Throwable) {
             // Camera2 / MediaCodec 在部分机型上不可用：提示而不是崩溃
             android.util.Log.w("LocalPTT", "视频会话启动失败", e)
@@ -234,9 +427,12 @@ class VideoActivity : AppCompatActivity() {
         }
     }
 
-    /** 视频通话的双向语音：免提常开（麦克风 + 扬声器）。 */
+    /** 视频通话的双向语音：免提常开（麦克风可手动关，扬声器常开）。 */
     private fun startAudio() {
-        if (audio != null) return
+        if (audio != null) {
+            audio?.setMicMuted(!micOn)
+            return
+        }
         val bus = AppBus.bus ?: return
         if (ContextCompat.checkSelfPermission(this, Manifest.permission.RECORD_AUDIO) !=
             PackageManager.PERMISSION_GRANTED
@@ -246,6 +442,7 @@ class VideoActivity : AppCompatActivity() {
                 if (it.start()) {
                     it.setSpeaker(true)
                     it.startHandsFree()
+                    it.setMicMuted(!micOn)
                 }
             }
         }.onFailure { android.util.Log.w("LocalPTT", "视频通话音频启动失败：${it.message}") }
@@ -294,6 +491,8 @@ class VideoActivity : AppCompatActivity() {
     /** 对端 id → 昵称，拿不到就直接显示 id。 */
     private fun peerNameOf(id: String): String =
         AppBus.peers.firstOrNull { it.id == id }?.name?.takeIf { it.isNotBlank() } ?: id
+
+    private fun dp(v: Int): Int = (v * resources.displayMetrics.density).toInt()
 
     private fun id() = System.currentTimeMillis().toString().takeLast(8)
     private fun toast(s: String) = Toast.makeText(this, s, Toast.LENGTH_SHORT).show()

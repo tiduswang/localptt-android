@@ -67,6 +67,10 @@ class AudioEngine(
     @Volatile var playbackMuted = false
         private set
 
+    /** 是否关掉麦克风（视频页手动开关）：关掉后采集到的声音不编码、不发包。 */
+    @Volatile var micMuted = false
+        private set
+
     /** 本机有没有可用的麦克风 / 扬声器（UI 用来提示，而不是静默失败）。 */
     val canRecord: Boolean get() = rec != null
     val canPlay: Boolean get() = track != null
@@ -280,6 +284,11 @@ class AudioEngine(
         }
     }
 
+    /** 静音/取消静音麦克风（不影响听对方）。 */
+    fun setMicMuted(muted: Boolean) {
+        micMuted = muted
+    }
+
     /**
      * 按住说话：只切换「发不发包」，麦克风保持常开（按键即出声，没有启动延迟）。
      * 参考 meshenger 的 PTT：用轨道 enable/disable 而不是反复停启采集。
@@ -310,8 +319,8 @@ class AudioEngine(
         while (isActive) {
             val n = runCatching { rec?.read(pcm, 0, frameSamples) ?: 0 }.getOrDefault(0)
             if (n <= 0) { delay(20); continue }     // 读失败/无数据：别空转烧 CPU
-            // 没在说话就把缓冲读空，不编码、不发包
-            if (!talking && !handsFree) continue
+            // 关麦 / 没在说话：把缓冲读空，不编码、不发包
+            if (micMuted || (!talking && !handsFree)) continue
             applyGain(pcm, n, recGain)
             val enc = runCatching { codec.encode(pcm, n) }.getOrDefault(ByteArray(0))
             if (enc.isNotEmpty()) bus.sendFrame(seq++, enc)
