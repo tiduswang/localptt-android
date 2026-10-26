@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- 儿童风明亮主题：固定亮色，避免夜间模式把糖果色变暗 -->
+    <style name="Theme.KidsTalk" parent="Theme.Material3.Light.NoActionBar">
+        <item name="colorPrimary">@color/c_pink</item>
+        <item name="colorPrimaryDark">@color/c_orange_dark</item>
+        <item name="colorAccent">@color/c_orange</item>
+        <item name="android:colorBackground">@color/kids_bg</item>
+        <item name="android:windowBackground">@color/kids_bg</item>
+        <item name="android:textColorPrimary">@color/kids_text</item>
+        <item name="android:textColorSecondary">@color/kids_text_sub</item>
+        <item name="android:statusBarColor">@color/kids_cream</item>
+        <item name="android:windowLightStatusBar">true</item>
+    </style>
+</resources>
