@@ -23,10 +23,20 @@ jobs:
           distribution: temurin
           java-version: '17'
 
-      - name: Install SDK packages
+      # runner 已预装 Android SDK，sdkmanager 不在 PATH 里（cmdline-tools 路径随镜像变化），
+      # 这里先自己找一遍，装上缺的包；找不到也不让构建失败，后面用已装的版本。
+      - name: Ensure Android SDK packages
         run: |
-          yes | sdkmanager --licenses > /dev/null || true
-          sdkmanager --install "platforms;android-34" "build-tools;34.0.0" "platform-tools"
+          echo "ANDROID_HOME=$ANDROID_HOME"
+          SDK_BIN="$(ls -d "$ANDROID_HOME"/cmdline-tools/*/bin 2>/dev/null | head -1)"
+          if [ -n "$SDK_BIN" ] && [ -x "$SDK_BIN/sdkmanager" ]; then
+            yes | "$SDK_BIN/sdkmanager" --licenses > /dev/null || true
+            "$SDK_BIN/sdkmanager" --install "platforms;android-34" "build-tools;34.0.0" "platform-tools" || true
+          else
+            echo "sdkmanager 未找到，使用 runner 预装 SDK"
+          fi
+          echo "--- platforms ---"; ls "$ANDROID_HOME/platforms" || true
+          echo "--- build-tools ---"; ls "$ANDROID_HOME/build-tools" || true
 
       - name: Set up Gradle
         uses: gradle/actions/setup-gradle@v4
