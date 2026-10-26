@@ -14,8 +14,6 @@ import com.example.localptt.AppBus
 import com.example.localptt.R
 import com.example.localptt.audio.AudioEngine
 import com.example.localptt.data.Feature
-import com.example.localptt.data.FeatureSync
-import com.example.localptt.net.uid
 import kotlinx.coroutines.launch
 
 /**
@@ -142,9 +140,7 @@ class VoiceActivity : AppCompatActivity() {
         if (AppBus.activeFeature == Feature.VOICE) AppBus.activeFeature = null
         // 告诉房间里的小伙伴：我也退出语音页了（对端会同步退出）
         if (!closedByRemote) {
-            runCatching {
-                AppBus.post(FeatureSync(AppBus.myId, "all", uid(), Feature.VOICE, Feature.EXIT))
-            }
+            runCatching { AppBus.postFeatureExit(Feature.VOICE) }
         }
     }
 

@@ -111,7 +111,9 @@ data class GameInvite(
 @Serializable @SerialName("game_move")
 data class GameMove(
     override val from: String, override val to: String, override val id: String,
-    val game: String, val value: Int, val nonce: String
+    val game: String, val value: Int, val nonce: String,
+    /** 局号（双方各自裁定后同步 +1）。用于把上一局的揭晓/承诺同本局隔离开。 */
+    val round: Int = 0
 ) : Msg
 
 /**
@@ -121,13 +123,17 @@ data class GameMove(
 @Serializable @SerialName("game_commit")
 data class GameCommit(
     override val from: String, override val to: String, override val id: String,
-    val game: String, val commitment: String
+    val game: String, val commitment: String,
+    /** 局号，见 [GameMove.round]。 */
+    val round: Int = 0
 ) : Msg
 
 @Serializable @SerialName("game_result")
 data class GameResult(
     override val from: String, override val to: String, override val id: String,
-    val game: String, val winner: String, val a: Int, val b: Int
+    val game: String, val winner: String, val a: Int, val b: Int,
+    /** 这是第几局的结果。 */
+    val round: Int = 0
 ) : Msg
 
 @Serializable @SerialName("bye")

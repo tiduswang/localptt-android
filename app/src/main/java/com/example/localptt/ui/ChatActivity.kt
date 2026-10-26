@@ -28,10 +28,8 @@ import com.example.localptt.chat.ChatManager
 import com.example.localptt.data.Avatars
 import com.example.localptt.data.ChatMsg
 import com.example.localptt.data.Feature
-import com.example.localptt.data.FeatureSync
 import com.example.localptt.data.Msg
 import com.example.localptt.data.VoiceMeta
-import com.example.localptt.net.uid
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
@@ -297,9 +295,7 @@ class ChatActivity : AppCompatActivity() {
         // 位图交给 GC（这里不 recycle：正在显示的 dialog/列表可能还在用）
         photoCache.clear()
         if (!closedByRemote) {
-            runCatching {
-                AppBus.post(FeatureSync(AppBus.myId, "all", uid(), Feature.CHAT, Feature.EXIT))
-            }
+            runCatching { AppBus.postFeatureExit(Feature.CHAT) }
         }
     }
 

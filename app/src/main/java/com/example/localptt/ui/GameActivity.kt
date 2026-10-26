@@ -10,10 +10,8 @@ import com.example.localptt.AppBus
 import com.example.localptt.R
 import com.example.localptt.data.Avatars
 import com.example.localptt.data.Feature
-import com.example.localptt.data.FeatureSync
 import com.example.localptt.data.GameResult
 import com.example.localptt.game.GameManager
-import com.example.localptt.net.uid
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 
@@ -39,6 +37,15 @@ class GameActivity : AppCompatActivity() {
     /** 是否由对端同步关闭。 */
     private var closedByRemote = false
 
+    /** 掷骰子是否正在播放「滚动」动画（避免连点重复出招）。 */
+    private var rolling = false
+
+    /** 本页是否已经出过招 —— 没出招之前绝不显示结果（否则会看到上一页遗留的旧结果）。 */
+    private var everPlayed = false
+
+    /** 我最近一次出招的局号，用于过滤重放的旧结果。 */
+    private var lastPlayedRound = 0
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         setContentView(R.layout.activity_game)
@@ -57,8 +64,8 @@ class GameActivity : AppCompatActivity() {
         findViewById<View>(R.id.btnScissors).setOnClickListener { play(1) }
         findViewById<View>(R.id.btnPaper).setOnClickListener { play(2) }
 
-        // 掷骰子：随机 1~6
-        findViewById<View>(R.id.btnDiceRoll).setOnClickListener { play((1..6).random()) }
+        // 掷骰子：先播「滚动」动画，动画结束才锁定点数出招
+        findViewById<View>(R.id.btnDiceRoll).setOnClickListener { rollDice() }
 
         // 默认对手：房间里第一个小伙伴（不用先点「邀请」也能出招）
         if (peerId == null) peerId = AppBus.others.firstOrNull()?.id
@@ -115,10 +122,34 @@ class GameActivity : AppCompatActivity() {
         peerId = peer.id
         gameType = type
         game?.reset(peer.id)
+        everPlayed = false
+        lastPlayedRound = 0
         game?.invite(peer.id, type)
-        tvStatus.text = "已邀请 ${peer.name} 玩 ${gameName(type)}，快出招！"
-        tvResult.text = "🤔 等结果…"
+        tvStatus.text = "第 1 局 · 已邀请 ${peer.name} 玩 ${gameName(type)}，快出招！"
+        tvResult.text = if (type == "dice") "🎲 点「掷骰子」开扔～" else "🤔 出招后等结果…"
         refreshPeerHint()
+    }
+
+    /** 掷骰子：先在界面上滚 0.6 秒，再锁定点数、把承诺发给对端（局号由 GameManager 管理）。 */
+    private fun rollDice() {
+        if (rolling) return
+        if (peerId == null) {
+            toast("先选一个游戏，叫上小伙伴吧")
+            return
+        }
+        gameType = "dice"
+        val peer = peerId ?: return
+        if (game?.roundOf(peer) == 0) return
+        rolling = true
+        lifecycleScope.launch {
+            repeat(9) {
+                val face = (1..6).random()
+                tvResult.text = "${diceFace(face)}\n🎲 咕噜咕噜…"
+                delay(65)
+            }
+            rolling = false
+            play((1..6).random())
+        }
     }
 
     private fun play(value: Int) {
@@ -127,12 +158,24 @@ class GameActivity : AppCompatActivity() {
             toast("先选一个游戏，叫上小伙伴吧")
             return
         }
-        game?.play(peer, gameType, value)
-        tvStatus.text = "🔒 出好啦！等小伙伴一起开～"
-        tvResult.text = "${moveEmoji(gameType, value)} 你出了 ${moveName(gameType, value)}\n🤔 等小伙伴出招…"
+        val no = game?.play(peer, gameType, value) ?: return
+        if (no == 0) {
+            toast("本局已经出过招啦，等小伙伴一起开～")
+            return
+        }
+        everPlayed = true
+        lastPlayedRound = no
+        tvStatus.text = "第 $no 局 · 你已出招，等小伙伴一起开～"
+        tvResult.text = if (gameType == "dice") {
+            "${diceFace(value)}\n🎲 你掷出了 $value 点\n🤔 等小伙伴掷骰子…"
+        } else {
+            "${moveEmoji(gameType, value)} 你出了 ${moveName(gameType, value)}\n🤔 等小伙伴出招…"
+        }
     }
 
     private fun showResult(r: GameResult) {
+        // 没出过招 / 上一局重放出来的旧结果，一律不显示 —— 杜绝「还没扔就比出胜负」
+        if (!everPlayed || r.round == 0 || r.round < lastPlayedRound) return
         runOnUiThread {
             val peerName = AppBus.peers.firstOrNull { it.id == r.to }?.name ?: "小伙伴"
             val w = when (r.winner) {
@@ -153,12 +196,20 @@ class GameActivity : AppCompatActivity() {
                     else -> "（他的赢你的）"
                 }
             }
+            val iconA = if (r.game == "dice") diceFace(r.a) else moveEmoji(r.game, r.a)
+            val iconB = if (r.game == "dice") diceFace(r.b) else moveEmoji(r.game, r.b)
             tvResult.text =
-                "${moveEmoji(r.game, r.a)} 你：${moveName(r.game, r.a)}\n" +
-                        "${moveEmoji(r.game, r.b)} $peerName：${moveName(r.game, r.b)}\n" +
+                "$iconA 你：${moveName(r.game, r.a)}\n" +
+                        "$iconB $peerName：${moveName(r.game, r.b)}\n" +
                         "$w$cmp"
-            tvStatus.text = "本局结束啦，可以再出一次招 😊"
+            tvStatus.text = "第 ${r.round} 局结束 · 再出一次招就是第 ${r.round + 1} 局 😊"
         }
+    }
+
+    /** 骰子点数 → 六面骰字符（不支持时退回 🎲）。 */
+    private fun diceFace(v: Int): String = when (v) {
+        1 -> "⚀"; 2 -> "⚁"; 3 -> "⚂"; 4 -> "⚃"; 5 -> "⚄"; 6 -> "⚅"
+        else -> "🎲"
     }
 
     /** 出招值 → 可爱图标 */
@@ -192,9 +243,7 @@ class GameActivity : AppCompatActivity() {
         super.onDestroy()
         if (AppBus.activeFeature == Feature.GAME) AppBus.activeFeature = null
         if (!closedByRemote) {
-            runCatching {
-                AppBus.post(FeatureSync(AppBus.myId, "all", uid(), Feature.GAME, Feature.EXIT))
-            }
+            runCatching { AppBus.postFeatureExit(Feature.GAME) }
         }
     }
 

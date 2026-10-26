@@ -17,9 +17,7 @@ import com.example.localptt.AppBus
 import com.example.localptt.R
 import com.example.localptt.audio.AudioEngine
 import com.example.localptt.data.Feature
-import com.example.localptt.data.FeatureSync
 import com.example.localptt.data.VideoCall
-import com.example.localptt.net.uid
 import com.example.localptt.video.VideoCallSession
 import kotlinx.coroutines.flow.receiveAsFlow
 import kotlinx.coroutines.launch
@@ -134,9 +132,7 @@ class VideoActivity : AppCompatActivity() {
         super.onDestroy()
         if (AppBus.activeFeature == Feature.VIDEO) AppBus.activeFeature = null
         if (!closedByRemote) {
-            runCatching {
-                AppBus.post(FeatureSync(AppBus.myId, "all", uid(), Feature.VIDEO, Feature.EXIT))
-            }
+            runCatching { AppBus.postFeatureExit(Feature.VIDEO) }
         }
     }
 

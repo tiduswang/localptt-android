@@ -14,9 +14,12 @@ import com.example.localptt.net.HostBeacon
 import com.example.localptt.net.UdpBus
 import com.example.localptt.net.WifiDirectManager
 import com.example.localptt.net.netGuard
+import com.example.localptt.net.uid
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.asCoroutineDispatcher
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.launch
@@ -153,6 +156,34 @@ object AppBus {
                 val c = client
                 if (c != null) c.send(m) else server?.send(m)
             }
+        }
+    }
+
+    /**
+     * 广播「我进入了某功能」，并在 1.2s 后补发一次。
+     * 补发用于兜底首包丢失 / 对端页面还没起来；重复到达会被对端 openRemotely()
+     * 的 activeFeature 去重逻辑挡住，不会反复弹页面。
+     */
+    fun postFeatureEnter(feature: String) {
+        val sync = FeatureSync(myId, "all", uid(), feature, com.example.localptt.data.Feature.ENTER)
+        post(sync)
+        CoroutineScope(Dispatchers.IO + SupervisorJob() + netGuard).launch {
+            delay(1200)
+            post(sync)
+        }
+    }
+
+    /**
+     * 广播「我退出了某功能」，并在 0.8s 后补发一次。
+     * 与 [postFeatureEnter] 对称：网络抖动丢首包时，补发保证对端能同步退出；
+     * 对端已退出则重复到达的 EXIT 会被忽略（页面已销毁，collector 取消）。
+     */
+    fun postFeatureExit(feature: String) {
+        val sync = FeatureSync(myId, "all", uid(), feature, com.example.localptt.data.Feature.EXIT)
+        post(sync)
+        CoroutineScope(Dispatchers.IO + SupervisorJob() + netGuard).launch {
+            delay(800)
+            post(sync)
         }
     }
 }

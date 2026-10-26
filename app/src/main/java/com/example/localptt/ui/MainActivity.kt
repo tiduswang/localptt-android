@@ -31,11 +31,9 @@ import com.example.localptt.net.DiscoveredHost
 import com.example.localptt.net.DiscoveryListener
 import com.example.localptt.net.WifiDirectManager
 import com.example.localptt.net.WifiGate
-import com.example.localptt.net.uid
 import com.example.localptt.room.ConnectMode
 import com.example.localptt.room.RoomManager
 import com.example.localptt.room.RoomState
-import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.launchIn
 import kotlinx.coroutines.flow.onEach
 import kotlinx.coroutines.launch
@@ -326,22 +324,8 @@ class MainActivity : AppCompatActivity() {
             toast("先点「🏠 开个房间」或「🔍 找小伙伴」，连上小伙伴才能一起玩哦")
             return
         }
-        postEnter(feature)
+        AppBus.postFeatureEnter(feature)
         startActivity(android.content.Intent(this, cls))
-    }
-
-    /**
-     * 广播「我进入了某功能」，并在 1.2s 后补发一次。
-     * 补发用于兜底首包丢失 / 对端页面还没起来；重复到达会被 openRemotely()
-     * 的 activeFeature 去重逻辑挡住，不会反复弹页面。
-     */
-    private fun postEnter(feature: String) {
-        val sync = FeatureSync(myId, "all", uid(), feature, Feature.ENTER)
-        runCatching { AppBus.post(sync) }
-        lifecycleScope.launch {
-            delay(1200)
-            runCatching { AppBus.post(sync) }
-        }
     }
 
     /** 收到对端的 enter：自动打开同一功能页（已经在里面则不重复打开）。 */
