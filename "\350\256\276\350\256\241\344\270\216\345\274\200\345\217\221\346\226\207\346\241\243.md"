@@ -1,0 +1,270 @@
+# 本地 2.4GHz WiFi 对讲机应用 —— 设计与开发文档
+
+> 目标：仅用手机自身 2.4GHz WiFi（Wi-Fi Direct / 热点），**无外网**、无服务器，组建本地对讲网络，
+> 实现①实时语音对讲 ②实时视频对讲 ③简易微聊（表情/语音消息/照片）④联机小游戏（猜拳/掷骰子比大小）。
+
+---
+
+## 1. 技术选型
+
+| 能力 | 选型 | 理由 / 备注 |
+|---|---|---|
+| 本地组网 | **Wi-Fi Direct (P2P)**，强制 `GROUP_OPERATING_BAND_2GHZ` | 无 AP 即可组网状局域网；GO 固定 IP `192.168.49.1` |
+| 发现兜底 | **NSD** + **便携热点(SoftAP)** 兜底 | 部分机型 P2P 受限时，一台开热点、其余接入 |
+| 设备发现 | NSD 服务广播 + 主机下发 `peerlist` | 拿到各节点 LAN IP，供媒体直连 |
+| 控制/信令 | **TCP + JSON**（主机中转，端口 8888） | 可靠、可广播；协议见 §4 |
+| 实时语音 | **AudioRecord + Opus(libopus/JNI) + UDP**；兜底 AMR-NB(MediaCodec) | Opus 低延迟抗丢包，最适合对讲；半双工 PTT |
+| 语音传输 | **UDP 单播/组播**（端口 5004），无重传 | 实时性优先，容忍少量丢包 |
+| 实时视频 | **Camera2 + MediaCodec H.264 + RTP/UDP**（端口 5006） | 1对1 点对点；本地无 NAT 不需 STUN/TURN |
+| 视频兜底 | **WebRTC**（仅用媒体栈） | 若需更强抖动/丢包恢复，整体替换视频模块 |
+| 微聊 | TCP JSON（文字/表情/照片索引）+ 语音消息文件 uri | 可靠送达 |
+| 小游戏 | TCP JSON + **承诺-揭示(commit-reveal)防作弊** | 双方先发 hash 承诺，再公开校验 |
+| UI | Kotlin + Jetpack（ViewBinding/Compose） | minSdk 24 |
+| 权限 | 定位(P2P 必需)、RECORD_AUDIO、CAMERA、NEARBY_WIFI_DEVICES 等 | 见 AndroidManifest.xml |
+
+**为什么不全用 WebRTC**：WebRTC 自带 Opus/NetEq/抖动缓冲、抗丢包最强，但依赖信令交换 SDP/ICE，
+在纯局域网需自行实现信令。本地局域网无 NAT，本项目用「TCP JSON 自信令 + 原生 Opus/UDP」最轻量可落地；
+视频若要做稳，直接把 `VideoCallSession` 换成 WebRTC `PeerConnection` 即可，信令已就绪。
+
+---
+
+## 2. 网络架构（星型 + P2P 混合）
+
+```
+                 ┌─────────────────────────────────────────┐
+                 │   一台手机 = Group Owner(主机) GO          │
+                 │   192.168.49.1  ·  ControlServer(TCP:8888)│
+                 └───────────────┬─────────────────────────┘
+                  Wi-Fi Direct 2.4GHz 本地网络（无外网）
+        ┌────────────────────────┼────────────────────────┐
+        │                        │                        │
+   ┌────┴────┐             ┌─────┴────┐             ┌─────┴────┐
+   │ 客户端A  │             │ 客户端B   │             │ 客户端C   │
+   │ControlCl │             │ControlCl │             │ControlCl │
+   └────┬────┘             └─────┬────┘             └─────┬────┘
+        │ 语音UDP:5004(广播)      │                        │
+        │ 视频RTP:5006(点对点)    │                        │
+        └───────────── 媒体面直连（不经主机）──────────────┘
+
+控制面(信令): 所有节点 ⇄ 主机 TCP:8888  （发现/聊天/游戏/视频邀请）
+媒体面(语音): UDP 广播到组内所有对端 IP（由 peerlist 得到）
+媒体面(视频): RTP 点对点直连选定对端
+```
+
+- **发现（零配置，无需输入 IP）**：主机建组后 `HostBeacon` 自动广播（UDP 广播 8890 + mDNS 注册 `_localptt._tcp`）；客户端打开「加入」页由 `DiscoveryListener` 实时收集，合并 Wi-Fi Direct 原生发现结果展示「附近的主机」，点击即连；连接成功后 `ControlClient` 发 `Hello` → 主机回 `peerlist`。主机 IP 写入 SharedPreferences，下次启动自动重连。
+- **离开**：发 `Bye`，主机移除并广播新 `peerlist`。
+- **功能同步（同进同出）**：任一设备进入/退出某个功能页，通过 `FeatureSync` 信令
+  （`feature∈{voice,video,chat,game}`，`action∈{enter,exit}`）广播给房间内其他设备，
+  对端自动打开/关闭同一功能页。事件走 `AppBus.featureEvents`（`MutableSharedFlow` 广播，
+  而非 Channel，避免多消费者抢队列导致 exit 丢失）。
+- **微聊语音消息**：语音二进制文件由**发送方本机**的 `VoiceFileServer`（HTTP :8899）提供，
+  URL 指向发送方 IP；主机与客户端各自起服务，互不依赖，解决「主机收不到客户端语音」。
+
+---
+
+## 3. 模块划分
+
+```
+app/src/main/java/com/example/localptt/
+├── room/      RoomManager.kt     # ★ 房间生命周期状态机（进程级，唯一权威）
+├── data/      Protocol.kt        # 统一 JSON 消息模型（Msg 密封类）
+├── net/       WifiP2pManager.kt  # Wi-Fi Direct 组网/连接
+│             ControlServer.kt    # 主机 TCP 信令 + 在线表 + 转发
+│             ControlClient.kt    # 客户端 TCP 信令（3s 建连超时）
+│             UdpBus.kt           # 语音 UDP 广播总线
+│             RtpSocket.kt        # 视频 RTP over UDP
+├── audio/     AudioEngine.kt     # PTT 采集/编码/播放
+│             OpusCodec.kt        # Opus(JNI) 接口；AmrCodec 兜底
+├── video/     VideoCallSession.kt# Camera2+MediaCodec H264 1对1
+├── chat/      ChatManager.kt     # 表情/文字/语音消息/照片
+├── game/      GameManager.kt     # 猜拳/骰子 + 防作弊裁定
+└── ui/        MainActivity.kt    # 纯 UI 层：只订阅 RoomManager 状态
+            VoiceActivity / VideoActivity / ChatActivity / GameActivity
+```
+
+### 3.1 房间状态机 `room/RoomManager`（v1.1.0 新增）
+
+**动机**：v1.0.x 把所有组网逻辑都写在 `MainActivity` 里，「忙碌」由一个手写布尔量
+`working` 表达 —— 它只在网络回调里复位，而组网涉及的全部异步步骤（TCP 建连、
+Wi-Fi Direct `createGroup`、P2P 广播）都可能不回调。用户侧表现就是
+**三星 S23U「点了开房间一直显示正在处理中」**。同时 `MainActivity.onDestroy()`
+会 `AppBus.reset()`，导致旋转屏幕或被系统回收时房间悄悄消失。
+
+参考 GitHub 上同类实现（如 Wi-Fi Direct 参考实现 praveenkarunarathne/WIFI-Direct-Hotspot
+的 UI / Controller / Receiver / Data 四层划分，与 EchoDrop、wd-chat 的
+ViewModel + 单向数据流）收敛为三层：
+
+```
+UI（Activity）           只读 RoomState / status / peers，只调用 createRoom / joinRoom / forceReset
+  ↓ 单向数据流
+RoomManager（进程级）    资源生命周期 + 状态机 + 信令分发（不依赖任何页面）
+  ↓
+net / transport         ControlServer·ControlClient·UdpBus·HostBeacon·WifiDirectManager
+```
+
+状态机（`RoomState`）：
+
+```
+        createRoom()              handshake ok
+IDLE ───────────────► CREATING ─────────────► HOSTING ◄── onLost/自动重连
+  ▲                     │ 超时/失败              │
+  │                     └───────────────────────┤
+  │   joinRoom()                                │ leave()/forceReset()
+  └───────────────── JOINING ───────────────────┘
+                        │ 握手 ok
+                        ▼
+                      JOINED
+```
+
+三条硬约束保证「不可能卡住」：
+
+| 机制 | 说明 |
+|---|---|
+| `runExclusive()` = Mutex + `withTimeout` | 开房 / 加入 / P2P 分别限时 15s / 15s / 8s；超时即回 `IDLE` 并给出可执行提示 |
+| `generation` 版本号 | `forceReset()` 自增 → 在途回调作废且不得改写 UI；创建资源也先存局部变量，确认未被打断才挂到 `AppBus` |
+| `finally` 兜底 | 操作体提前 return 时强制退出中间态、释放资源 |
+
+配套修正：
+
+- **`Socket()` + `connect(addr, 3000ms)`**：旧代码 `Socket(host, port)` 无超时，房间已散、
+  本地却还记着 IP 时会阻塞数十秒——这是「一直处理中」最直接的成因。
+- **socket 创建全部在 `Dispatchers.IO`**：`ControlServer` 过去在主线程 bind，Mate/三星机型明显卡顿。
+- **Wi-Fi Direct 改为按需**：`wifiIpv4()` 检测到 Wi-Fi 局域网时不再调 `createGroup()`
+  （三星 OneUI 上会触发系统重置 Wi-Fi）；无局域网才尝试，且**先 `removeGroup()` 等 600ms**
+  再 `createGroup()`（残留旧组会让 `createGroup` 一直返回 `BUSY`），
+  `onSuccess` 后**轮询** `requestConnectionInfo`（组通常要数百毫秒才成形）。
+- **信令分发进程化**：`startDispatch()` 跑在 RoomManager 协程里，Activity 重建不再丢消息。
+- **首页权限门槛归零**：组网/微聊不需要运行时权限；麦克风归语音页、相机归视频页按需索取。
+
+### 3.2 Wi-Fi 门禁 `net/WifiGate`（v1.1.1 新增）
+
+**动机**：全部通信都建立在本地 Wi-Fi 局域网上。Wi-Fi 关着的时候点「开房间 / 找小伙伴」，
+TCP/UDP 一路走超时，用户只会看到「15 秒转圈后失败」，完全不知道是自己忘了开 Wi-Fi。
+因此把「有没有 Wi-Fi」做成**出门前的第一道检查**。
+
+三态区分（避免提示语牛头不对马嘴）：
+
+| 状态 | 判定 | 用户看到的提示 |
+|---|---|---|
+| `OK` | `wifiIpv4() != null`（Wi-Fi / 热点 / 有线以太网任一可用） | 正常放行 |
+| `WIFI_OFF` | 拿不到局域网 IP 且 `WifiManager.isWifiEnabled == false` | 「Wi-Fi 还是关着的哦」 |
+| `NO_LAN` | 开关开着但还没拿到 IP（正在连接 / 开了没连） | 「Wi-Fi 开了，但还没连上网络」 |
+
+Android 开关限制与对策：
+
+| 系统 | 能否第三方直接开 Wi-Fi | 本 App 做法 |
+|---|---|---|
+| Android 9（API 28）及以下 | ✅ 可以 | `WifiManager.setWifiEnabled(true)`，**直接替用户打开**，全程无感知 |
+| Android 10（API 29）起 | ❌ 系统禁止，`setWifiEnabled` 恒返回 false | 拉 `Settings.Panel.ACTION_WIFI` 悬浮面板（不必离开 App 进完整设置页）；不支持再降级 `ACTION_WIFI_SETTINGS` |
+
+流程（UI 层 `MainActivity.ensureWifi{}`）：
+
+```
+点击「开个房间」/「找小伙伴」
+        │
+        ├─ OK ─────────────────────────► 直接执行
+        │
+        ├─ tryEnable() 成功（旧机型）──► waitForWifiThenRun()
+        │                                 等 IP 落地（≤12s）后自动继续
+        └─ 不允许自动开（Android 10+）─► 弹童趣提示 → 系统 Wi-Fi 面板
+                                          onResume → 轮询就绪 → 自动继续刚才那一步
+```
+
+两条硬约束：
+
+| 机制 | 说明 |
+|---|---|
+| 等待必有上限 | `awaitReady(ctx, ≤12s)`；超时也照样执行，失败原因由 RoomManager 明确给出，不让用户干等 |
+| 服务端也要校验 | `RoomManager.ensureWifiReady()` 前置检查：即使绕过 UI 直接调用也会先尝试打开，**打不开立即失败**并明确说「Wi-Fi 还没打开」，不浪费那 15 秒 |
+
+其余要点：首页橙色提示条（`wifiTip`）随 `WIFI_STATE_CHANGED_ACTION` 实时出现/消失；
+在房间里把 Wi-Fi 关掉时通过 `RoomManager.hint()` 明确告警，而不是默默掉线。
+
+---
+
+## 4. 通信协议（控制面 TCP JSON）
+
+| 消息 | 字段 | 说明 |
+|---|---|---|
+| `hello` | from,name,role,avatar | 上线握手（携带卡通头像） |
+| `welcome` | hostName,roomName,selfIp | 主机→客户端「加入确认」；客户端收到才算真正互联成功 |
+| `ping` / `pong` | ts | 心跳：主机 2.5s 下发，客户端回 pong；9s 超时剔除僵尸 + 自动重连 |
+| `peerlist` | peers[id,name,ip,role,avatar] | 主机定期下发在线名单（**含主机自己**，两端同渲染） |
+| `chat` | kind∈{text,emoji,voice,photo},body,ts | 微聊（表情/文字/语音/照片） |
+| `voicemeta` | durMs,uri | 语音消息元信息（uri 指向**发送方本机** HTTP :8899） |
+| `video` | action∈{invite,accept,reject,bye} | 视频通话信令（进页自动 invite/accept） |
+| `game_invite` | game∈{rps,dice} | 游戏邀请 |
+| `game_commit` | game,commitment=SHA256(nonce:value) | 承诺阶段（只公开 hash，不泄露出招） |
+| `game_move` | game,value,nonce | 揭晓阶段出招（nonce 供校验） |
+| `game_result` | game,winner,a,b | 裁定结果（客户端各自独立计算，不再互发） |
+| `feature` | feature∈{voice,video,chat,game},action∈{enter,exit} | 功能同步（同进同出） |
+| `bye` | — | 离线 |
+
+---
+
+## 5. 实现步骤（里程碑 + 验收）
+
+1. **组网与发现（M1）**
+   - 实现 `WifiP2pManager` 建组/连接；`ControlServer/Client` 完成 Hello/peerlist 互通。
+   - 验收：两台手机同屏显示对方在线。
+2. **实时语音（M2）**
+   - 集成 libopus（NDK），`AudioEngine` PTT 链路打通；`UdpBus` 广播。
+   - 验收：同网络两台机按住即说、即时听到；端到端延迟 < 300ms。
+3. **微聊（M3）**
+   - `ChatManager` 文字/表情/照片/语音消息；主机中转可靠送达。
+   - 验收：表情与照片实时出现在对端；语音消息可播放。
+4. **实时视频（M4）**
+   - `VideoCallSession` + `RtpSocket` 1对1；邀请/接听/挂断信令。
+   - 验收：640×480@20fps 流畅，关键帧秒出。
+5. **联机小游戏（M5）**
+   - `GameManager` 猜拳/骰子；commit-reveal 防作弊；结果广播。
+   - 验收：双方同时亮招、主机裁定一致、无篡改空间。
+6. **打磨（M6）**
+   - 断线重连、前台保活、功耗优化、权限引导、多机型适配。
+
+---
+
+## 6. 落地风险与对策
+
+| 风险 | 对策 |
+|---|---|
+| 部分机型 Wi-Fi Direct 不稳定 | 软AP 热点兜底；统一以「主机 IP」为信令地址 |
+| Android 要求定位权限才能发现 P2P | 运行时申请 `ACCESS_FINE_LOCATION`/`NEARBY_WIFI_DEVICES` |
+| Opus 需 NDK 编译 | 提供 `AmrCodec`(MediaCodec) 兜底；NDK 编译脚本见 cpp 模块 |
+| 视频丢包卡顿 | 关键帧间隔 1s；可整体切 WebRTC 媒体栈 |
+| 小游戏作弊 | commit-reveal：先发 SHA-256(nonce:value)，再公开校验 |
+| 后台被杀 | `foregroundServiceType=microphone` + WAKE_LOCK 保活 |
+
+---
+
+## 7. 关键代码位置索引
+
+- 组网：`net/WifiP2pManager.kt`（类名 `WifiDirectManager`，含 discoverPeers 发现）、`net/ControlServer.kt`、`net/ControlClient.kt`
+- 自动发现：`net/Discovery.kt`（`HostBeacon` 主机广播 UDP+mDNS / `DiscoveryListener` 客户端监听 / `localIpv4()` 工具）
+- 语音：`audio/AudioEngine.kt`、`audio/AudioCodec.kt`、`audio/AmrCodec.kt`、`audio/OpusCodec.kt`、`net/UdpBus.kt`
+- 视频：`video/VideoCallSession.kt`、`net/RtpSocket.kt`
+- 聊天：`chat/ChatManager.kt`、`chat/VoiceFileServer.kt`（主机语音文件 HTTP 服务）
+- 游戏：`game/GameManager.kt`（commit-reveal 防作弊状态机）
+- 协议：`data/Protocol.kt`（含新增 `GameCommit`）
+- 共享总线：`AppBus.kt`
+- UI：`ui/MainActivity.kt`（建网+信令分发）、`ui/VoiceActivity.kt`、`ui/VideoActivity.kt`、`ui/ChatActivity.kt`、`ui/GameActivity.kt`
+- 原生：`cpp/opus_wrapper.c`、`cpp/CMakeLists.txt`、`cpp/fetch_opus.sh`
+
+## 8. 实现完成度（截至本次交付）
+
+**编译校验：`gradle assembleDebug` → BUILD SUCCESSFUL，0 error / 0 warning。**
+产物：`app/build/outputs/apk/debug/app-debug.apk`（约 9.9 MB，含 10 个 dex、zip 完整，包名 `com.example.localptt`）。
+
+原框架中的 TODO 已全部补全：
+
+| 原 TODO | 实现方式 |
+|---|---|
+| AMR-NB 编解码循环 | `AmrCodec` 用 MediaCodec 同步 API 完成编解码；按 RFC 3267 ToC 头解析多帧；`AudioCodec` 增加 `sampleRate/frameSamples`，`AudioEngine` 据此配置 8kHz/16kHz |
+| 视频采集与解码喂帧 | 编码器改 `createInputSurface()` 作为 Camera2 输出目标（零拷贝）；Camera2 `createCaptureSession` 同时输出到预览与编码 surface；参数集（csd-0/csd-1）经 `onOutputFormatChanged` 取出发送，对端以 `BUFFER_FLAG_CODEC_CONFIG` 喂入；异步回调渲染到 SurfaceView |
+| 主机语音文件服务 | 新增 `VoiceFileServer`：主机 cacheDir/voice 上的 m4a 经 HTTP(8899) 暴露，`ChatManager` 拼 URL、接收方按需下载；含目录穿越防护 |
+| 小游戏防作弊 | `GameManager` 完整状态机：`play()` 只发 `GameCommit`(仅 hash) → 双方承诺齐备才 `reveal`(`GameMove` value+nonce) → 校验 SHA-256 → 裁定；任一方校验失败即作废本局 |
+| 主机发现填充 IP | `WifiDirectManager.discoverPeers()` + `requestPeers()`，MainActivity 弹出设备列表选择连接，失败可手动输入 IP |
+| NDK Opus 封装 | `opus_wrapper.c` + `CMakeLists.txt`（自动构建 libopus 静态库）+ `fetch_opus.sh`；本机无 NDK 故默认关闭，AMR 兜底功能等价 |
+
+> 原注：本仓库早期为「可落地代码框架」。现在全部功能代码已实现，仅 Opus 原生库为**可选增强**
+> （需自行安装 NDK 并拉取 libopus，步骤见 README「启用 Opus」）。
