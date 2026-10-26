@@ -1,0 +1,166 @@
+<?xml version="1.0" encoding="utf-8"?>
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:orientation="vertical"
+    android:padding="16dp"
+    android:background="@color/kids_bg"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent">
+
+    <LinearLayout
+        android:orientation="horizontal"
+        android:gravity="center_vertical"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content">
+
+        <FrameLayout
+            android:id="@+id/btnBack"
+            android:clickable="true"
+            android:focusable="true"
+            android:foreground="@drawable/ripple_dark"
+            android:background="@drawable/shape_circle_white"
+            android:layout_width="52dp"
+            android:layout_height="52dp">
+
+            <TextView
+                android:text="🔙"
+                android:textSize="24sp"
+                android:layout_gravity="center"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content" />
+        </FrameLayout>
+
+        <TextView
+            android:text="🎤 语音对讲"
+            android:textSize="20sp"
+            android:textStyle="bold"
+            android:textColor="@color/kids_text"
+            android:layout_marginStart="12dp"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content" />
+    </LinearLayout>
+
+    <LinearLayout
+        android:orientation="vertical"
+        android:gravity="center"
+        android:layout_weight="1"
+        android:layout_width="match_parent"
+        android:layout_height="0dp">
+
+        <FrameLayout
+            android:id="@+id/btnTalk"
+            android:clickable="true"
+            android:focusable="true"
+            android:foreground="@drawable/ripple_light"
+            android:background="@drawable/shape_circle_orange"
+            android:layout_width="220dp"
+            android:layout_height="220dp">
+
+            <LinearLayout
+                android:orientation="vertical"
+                android:gravity="center"
+                android:layout_width="match_parent"
+                android:layout_height="match_parent">
+
+                <TextView
+                    android:text="🎤"
+                    android:textSize="70sp"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content" />
+
+                <TextView
+                    android:text="按住说话"
+                    android:textSize="20sp"
+                    android:textStyle="bold"
+                    android:textColor="#FFFFFF"
+                    android:layout_marginTop="2dp"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content" />
+
+                <TextView
+                    android:text="松手就停"
+                    android:textSize="13sp"
+                    android:textColor="#FFFFFF"
+                    android:layout_marginTop="2dp"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content" />
+            </LinearLayout>
+        </FrameLayout>
+
+        <FrameLayout
+            android:layout_marginTop="24dp"
+            android:background="@drawable/shape_card_white"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content">
+
+            <LinearLayout
+                android:orientation="horizontal"
+                android:gravity="center_vertical"
+                android:paddingHorizontal="18dp"
+                android:paddingVertical="10dp"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content">
+
+                <TextView
+                    android:id="@+id/tvTalkIcon"
+                    android:text="😴"
+                    android:textSize="22sp"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content" />
+
+                <TextView
+                    android:id="@+id/tvHint"
+                    android:text="按住上面的按钮说话"
+                    android:textSize="16sp"
+                    android:textColor="@color/kids_text"
+                    android:layout_marginStart="10dp"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content" />
+            </LinearLayout>
+        </FrameLayout>
+
+        <FrameLayout
+            android:id="@+id/btnSpeaker"
+            android:clickable="true"
+            android:focusable="true"
+            android:foreground="@drawable/ripple_light"
+            android:background="@drawable/shape_pill_blue"
+            android:layout_marginTop="18dp"
+            android:layout_width="wrap_content"
+            android:layout_height="56dp">
+
+            <LinearLayout
+                android:orientation="horizontal"
+                android:gravity="center"
+                android:paddingHorizontal="22dp"
+                android:layout_width="wrap_content"
+                android:layout_height="match_parent">
+
+                <TextView
+                    android:id="@+id/tvSpeakerIcon"
+                    android:text="🔊"
+                    android:textSize="24sp"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content" />
+
+                <TextView
+                    android:id="@+id/tvSpeakerText"
+                    android:text="大喇叭：开"
+                    android:textSize="17sp"
+                    android:textStyle="bold"
+                    android:textColor="#FFFFFF"
+                    android:layout_marginStart="10dp"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content" />
+            </LinearLayout>
+        </FrameLayout>
+    </LinearLayout>
+
+    <TextView
+        android:text="⏳ 同一时间只有一个人能说话，说完要松手哦"
+        android:textSize="13sp"
+        android:textColor="@color/kids_text_sub"
+        android:gravity="center"
+        android:layout_marginBottom="8dp"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content" />
+</LinearLayout>
