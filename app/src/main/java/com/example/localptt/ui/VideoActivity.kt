@@ -306,15 +306,23 @@ class VideoActivity : AppCompatActivity() {
      * ★ 修「画中画里人横着」：
      * Camera2 输出的是 sensor 原始横画幅，直接塞进竖小窗人就横躺。
      * 这里按 sensor 方向 + 屏幕旋转的组合角度给 TextureView 设 rotation，
-     * Android 原生可靠地把显示内容转过来；前置相机再加镜像（scaleX=-1）像照镜子。
+     * Android 原生可靠地把显示内容转过来；前置相机再加镜像（像照镜子）。
      * 只影响本地预览，编码流走另一条 Surface，不受这个 View 变换影响。
+     *
+     * ★ 镜像轴按旋转角度选：Android 变换顺序是 scale→rotate，
+     *   先 `scaleX=-1` 再 `rotation=90°` 最终会变成**垂直翻**而不是水平翻。
+     *   所以 0°/180° 用 scaleX，90°/270° 用 scaleY，始终保持「水平镜像」。
      */
     private fun applyLocalPreviewTransform() {
-        val angle = sensorCorrection().toFloat()
-        localPreview.rotation = angle
-        // 前置相机：像照镜子一样左右翻
-        localPreview.scaleX = if (camFront) -1f else 1f
-        localPreview.scaleY = 1f
+        val angle = sensorCorrection()
+        localPreview.rotation = angle.toFloat()
+        // 前置相机：始终水平镜像像照镜子一样（旋转 90° 时画面轴变了，得翻 Y 轴才是水平镜像）
+        if (camFront) {
+            if (angle % 180 == 0) { localPreview.scaleX = -1f; localPreview.scaleY = 1f }
+            else                 { localPreview.scaleX = 1f; localPreview.scaleY = -1f }
+        } else {
+            localPreview.scaleX = 1f; localPreview.scaleY = 1f
+        }
     }
 
     /** 远端画面旋转 90/270 时要按舞台尺寸交换宽高，并居中，才能铺满不被裁。 */
