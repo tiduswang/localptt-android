@@ -301,11 +301,17 @@ class VideoActivity : AppCompatActivity() {
     }
 
     /**
-     * ★ 修「画中画里人横着」：
+     * ★ 修「画中画里人横着 / 只剩一条横带」：
      * Camera2 输出的是 sensor 原始横画幅，直接塞进竖小窗人就横躺。
      * 这里按 sensor 方向 + 屏幕旋转的组合角度给 TextureView 设 rotation，
      * Android 原生可靠地把显示内容转过来；前置相机再加镜像（像照镜子）。
      * 只影响本地预览，编码流走另一条 Surface，不受这个 View 变换影响。
+     *
+     * ★★ 关键（1.3.8）：View.rotation 只转画面、**不改变布局边界**。
+     *   104×148 的竖窗直接转 90°，旋转后可视区域变成 148 宽 ×104 高，
+     *   被父窗裁剪后只剩中间一条横带（上下黑边）——看起来就像「横屏」。
+     *   所以转 90/270 时必须把 TextureView 自己的宽高**互换**（148×104），
+     *   居中后再旋转，画面才能恰好铺满竖窗，不变形、不裁切。
      *
      * ★ 镜像轴按旋转角度选：Android 变换顺序是 scale→rotate，
      *   先 `scaleX=-1` 再 `rotation=90°` 最终会变成**垂直翻**而不是水平翻。
@@ -313,6 +319,22 @@ class VideoActivity : AppCompatActivity() {
      */
     private fun applyLocalPreviewTransform() {
         val angle = sensorCorrection()
+
+        // 转 90/270 时把预览 View 的宽高互换（居中），旋转后正好铺满小窗
+        val cw = localCard.width
+        val ch = localCard.height
+        if (cw > 0 && ch > 0) {
+            val wantW = if (angle % 180 != 0) ch else cw
+            val wantH = if (angle % 180 != 0) cw else ch
+            val lp = localPreview.layoutParams as FrameLayout.LayoutParams
+            if (lp.width != wantW || lp.height != wantH) {
+                lp.width = wantW
+                lp.height = wantH
+                lp.gravity = Gravity.CENTER
+                localPreview.layoutParams = lp
+            }
+        }
+
         localPreview.rotation = angle.toFloat()
         // 前置相机：始终水平镜像像照镜子一样（旋转 90° 时画面轴变了，得翻 Y 轴才是水平镜像）
         if (camFront) {
