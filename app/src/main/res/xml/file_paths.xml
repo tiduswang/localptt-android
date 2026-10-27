@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- FileProvider 配置：允许外部（相机 Intent）访问 app/cache 下的临时图片文件 -->
+<paths xmlns:android="http://schemas.android.com/apk/res/android">
+    <!-- 拍照临时文件放在 cache 根目录下 -->
+    <cache-path
+        name="camera_temp"
+        path="." />
+</paths>

@@ -23,6 +23,7 @@ import androidx.appcompat.app.AlertDialog
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.app.ActivityCompat
 import androidx.core.content.ContextCompat
+import androidx.core.content.FileProvider
 import androidx.lifecycle.lifecycleScope
 import androidx.recyclerview.widget.LinearLayoutManager
 import androidx.recyclerview.widget.RecyclerView
@@ -91,6 +92,18 @@ class ChatActivity : AppCompatActivity() {
             if (uri != null) sendPhoto(uri)
         }
 
+    /** 拍照：让系统相机把照片写进临时文件，再拿这个 FileProvider URI 走统一 sendPhoto。 */
+    private var cameraTempUri: Uri? = null
+    private val takePicture =
+        registerForActivityResult(ActivityResultContracts.TakePicture()) { ok ->
+            val uri = cameraTempUri; cameraTempUri = null
+            if (ok && uri != null) sendPhoto(uri)
+            else if (!ok) {
+                runCatching { cameraTempUri?.let { contentResolver.delete(it, null, null) } }
+                toast("📸 没拍上，再点一次拍照试试")
+            }
+        }
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         setContentView(R.layout.activity_chat)
@@ -115,6 +128,7 @@ class ChatActivity : AppCompatActivity() {
 
         findViewById<View>(R.id.btnEmoji).setOnClickListener { sendEmoji() }
         findViewById<View>(R.id.btnPhoto).setOnClickListener { pickPhoto.launch("image/*") }
+        findViewById<View>(R.id.btnCamera).setOnClickListener { takePhoto() }
 
         val btnVoice = findViewById<View>(R.id.btnVoiceMsg)
         val tvVoiceIcon = findViewById<TextView>(R.id.tvVoiceIcon)
@@ -228,15 +242,42 @@ class ChatActivity : AppCompatActivity() {
         ContextCompat.checkSelfPermission(this, Manifest.permission.RECORD_AUDIO) ==
             PackageManager.PERMISSION_GRANTED
 
+    private fun hasCam(): Boolean =
+        ContextCompat.checkSelfPermission(this, Manifest.permission.CAMERA) ==
+            PackageManager.PERMISSION_GRANTED
+
+    /** 点「📸 拍照」：先要相机权限，再让系统相机拍一张。拍完直接复用 sendPhoto 的压缩/发送流程。 */
+    private fun takePhoto() {
+        if (!hasCam()) {
+            ActivityCompat.requestPermissions(
+                this, arrayOf(Manifest.permission.CAMERA), REQ_CAMERA
+            )
+            toast("📸 先允许「相机」，再点拍照哦")
+            return
+        }
+        // 先清理上一次可能残留的临时文件（用户可能反复点了取消）
+        runCatching { cameraTempUri?.let { contentResolver.delete(it, null, null) } }
+        val f = File(cacheDir, "cam_${System.currentTimeMillis()}.jpg")
+        cameraTempUri = FileProvider.getUriForFile(this, "${packageName}.fileprovider", f)
+        takePicture.launch(cameraTempUri)
+    }
+
     override fun onRequestPermissionsResult(
         requestCode: Int,
         permissions: Array<out String>,
         grantResults: IntArray
     ) {
         super.onRequestPermissionsResult(requestCode, permissions, grantResults)
-        if (requestCode != REQ_MIC) return
-        val ok = grantResults.firstOrNull() == PackageManager.PERMISSION_GRANTED
-        toast(if (ok) "🎤 麦克风准备好了，按住说话试试" else "没有麦克风权限就发不了语音哦")
+        when (requestCode) {
+            REQ_MIC -> {
+                val ok = grantResults.firstOrNull() == PackageManager.PERMISSION_GRANTED
+                toast(if (ok) "🎤 麦克风准备好了，按住说话试试" else "没有麦克风权限就发不了语音哦")
+            }
+            REQ_CAMERA -> {
+                val ok = grantResults.firstOrNull() == PackageManager.PERMISSION_GRANTED
+                if (ok) takePhoto() else toast("📸 没给相机权限就拍不了照哦")
+            }
+        }
     }
 
     /** 照片压缩 + 发送都在后台做，避免大图解码卡住界面。 */
@@ -372,6 +413,9 @@ class ChatActivity : AppCompatActivity() {
     private companion object {
         /** 申请录音权限的请求码。 */
         const val REQ_MIC = 2003
+
+        /** 申请相机权限的请求码。 */
+        const val REQ_CAMERA = 2004
 
         /** 太短的录音 stop() 会失败、文件也不完整，直接取消并提示（1 秒左右比较稳）。 */
         const val MIN_VOICE_MS = 800L

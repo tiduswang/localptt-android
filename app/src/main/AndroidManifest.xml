@@ -69,5 +69,16 @@
             android:configChanges="orientation|screenSize|smallestScreenSize|keyboardHidden|screenLayout" />
         <activity android:name=".ui.ChatActivity" android:exported="false" android:launchMode="singleTop" />
         <activity android:name=".ui.GameActivity" android:exported="false" android:launchMode="singleTop" />
+
+        <!-- FileProvider：让相机 Intent 能把拍照文件写进我们的 app/cache 目录 -->
+        <provider
+            android:name="androidx.core.content.FileProvider"
+            android:authorities="${applicationId}.fileprovider"
+            android:exported="false"
+            android:grantUriPermissions="true">
+            <meta-data
+                android:name="android.support.FILE_PROVIDER_PATHS"
+                android:resource="@xml/file_paths" />
+        </provider>
     </application>
 </manifest>

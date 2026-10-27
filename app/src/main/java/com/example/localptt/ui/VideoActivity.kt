@@ -3,7 +3,6 @@ package com.example.localptt.ui
 import android.Manifest
 import android.content.pm.ActivityInfo
 import android.content.pm.PackageManager
-import android.graphics.Matrix
 import android.graphics.SurfaceTexture
 import android.os.Bundle
 import android.view.Gravity
@@ -304,34 +303,18 @@ class VideoActivity : AppCompatActivity() {
     }
 
     /**
-     * ★ 修复「画中画里人一直是横着的」：
-     * Camera2 输出的是 **sensor 原始画幅**（多数机型是横的），直接塞进竖的小窗里人就横躺了。
-     * 原来只给整块 TextureView 设 rotation，而 videoRotation 默认 0，所以等于完全没纠正。
-     * 这里用 TextureView 的**显示变换矩阵**按 sensor 方向旋转 + 等比铺满小窗，
-     * 只影响本地预览，不影响编码发送的那一路（预览和编码是两个独立的 Surface）。
+     * ★ 修「画中画里人横着」：
+     * Camera2 输出的是 sensor 原始横画幅，直接塞进竖小窗人就横躺。
+     * 这里按 sensor 方向 + 屏幕旋转的组合角度给 TextureView 设 rotation，
+     * Android 原生可靠地把显示内容转过来；前置相机再加镜像（scaleX=-1）像照镜子。
+     * 只影响本地预览，编码流走另一条 Surface，不受这个 View 变换影响。
      */
     private fun applyLocalPreviewTransform() {
-        val w = localPreview.width
-        val h = localPreview.height
-        if (w <= 0 || h <= 0 || !localPreview.isAvailable) return
-        val rotation = sensorCorrection()
-
-        // 相机缓冲按 4:3 横画幅处理（编码候选也是 640x480 / 320x240）
-        val bw = 4f
-        val bh = 3f
-        val rw = if (rotation % 180 == 0) bw else bh
-        val rh = if (rotation % 180 == 0) bh else bw
-        val scale = maxOf(w / rw, h / rh)      // 等比铺满小窗，多余部分居中裁掉
-
-        val m = Matrix()
-        // TextureView 默认把缓冲「拉伸铺满」视图，先抵消这个拉伸，再按真实比例旋转缩放
-        m.postScale(bw / w, bh / h)
-        m.postTranslate(-bw / 2f, -bh / 2f)
-        m.postScale(scale, scale)
-        m.postRotate(rotation.toFloat())
-        m.postTranslate(w / 2f, h / 2f)
-        if (camFront) m.postScale(-1f, 1f, w / 2f, h / 2f)   // 前置像照镜子一样左右翻
-        localPreview.setTransform(m)
+        val angle = sensorCorrection().toFloat()
+        localPreview.rotation = angle
+        // 前置相机：像照镜子一样左右翻
+        localPreview.scaleX = if (camFront) -1f else 1f
+        localPreview.scaleY = 1f
     }
 
     /** 远端画面旋转 90/270 时要按舞台尺寸交换宽高，并居中，才能铺满不被裁。 */
