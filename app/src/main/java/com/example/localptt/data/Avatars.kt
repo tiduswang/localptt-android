@@ -3,21 +3,30 @@ package com.example.localptt.data
 import com.example.localptt.R
 
 /**
- * 卡通头像库：10 个内置头像，全部为自绘 vector（不依赖 emoji 字体，老机型也不会变豆腐块）。
+ * 卡通头像库：15 个内置头像，全部为自绘 vector（不依赖 emoji 字体，老机型也不会变豆腐块）。
  * key 会随 Hello / PeerList 在网络上传输，因此对端也能显示你的头像。
+ *
+ * 1.3.7 新增布鲁伊一家（Bluey / Bingo / Bandit / Chili）和小蜜蜂。
  */
 object Avatars {
     val keys = listOf(
         "bear", "rabbit", "cat", "dog", "fox",
-        "panda", "tiger", "frog", "koala", "unicorn"
+        "panda", "tiger", "frog", "koala", "unicorn",
+        "bluey", "bingo", "bandit", "chili", "bee"
     )
 
     val labels = listOf(
         "小熊", "小兔", "小猫", "小狗", "小狐狸",
-        "熊猫", "老虎", "青蛙", "考拉", "独角兽"
+        "熊猫", "老虎", "青蛙", "考拉", "独角兽",
+        "布鲁伊", "宾果", "班底特", "奇莉", "小蜜蜂"
     )
 
     fun drawableOf(key: String): Int = when (key) {
+        "bluey" -> R.drawable.av_bluey
+        "bingo" -> R.drawable.av_bingo
+        "bandit" -> R.drawable.av_bandit
+        "chili" -> R.drawable.av_chili
+        "bee" -> R.drawable.av_bee
         "rabbit" -> R.drawable.av_rabbit
         "cat" -> R.drawable.av_cat
         "dog" -> R.drawable.av_dog

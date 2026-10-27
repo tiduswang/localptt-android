@@ -14,6 +14,7 @@ import android.view.View
 import android.view.ViewGroup
 import android.widget.ArrayAdapter
 import android.widget.EditText
+import android.widget.GridView
 import android.widget.ImageView
 import android.widget.LinearLayout
 import android.widget.TextView
@@ -118,6 +119,9 @@ class ChatActivity : AppCompatActivity() {
         rv.adapter = adapter
 
         refreshPeerBar()
+
+        // 顶部实时信号（我 / 对方）
+        findViewById<TextView>(R.id.tvLink).bindLinkQuality(this)
 
         findViewById<View>(R.id.btnChatBack).setOnClickListener { finish() }
 
@@ -303,19 +307,33 @@ class ChatActivity : AppCompatActivity() {
             ?.setImageResource(Avatars.drawableOf(peer?.avatar ?: "bear"))
     }
 
-    /** 表情面板：大号表情 + 文字说明，小朋友一看就懂。 */
+    /**
+     * 表情面板：6 列网格、54 个 emoji，只显示表情本身（不带中文说明），小朋友一眼就能挑。
+     * 点一下就发出去并关闭面板。
+     */
     private fun sendEmoji() {
-        val emojis = arrayOf("👍", "❤️", "😂", "😮", "😢", "🎉", "⭐", "👋")
-        val labels = arrayOf("真棒", "喜欢", "太好笑", "哇！", "难过", "好耶", "厉害", "拜拜")
-        val rows = emojis.mapIndexed { i, e -> "$e  ${labels[i]}" }
-
-        val listAdapter = ArrayAdapter(this, R.layout.item_emoji, R.id.tvEmoji, rows)
-        AlertDialog.Builder(this)
+        val emojis = arrayOf(
+            "😀", "😃", "😄", "😁", "😆", "😅",
+            "😂", "🤣", "😊", "😇", "🙂", "😉",
+            "😍", "🥰", "😘", "😜", "🤪", "😎",
+            "🤗", "🤔", "🤭", "😴", "😢", "😭",
+            "😡", "😱", "🥳", "🥺", "😷", "🤒",
+            "👍", "👎", "👏", "🙏", "💪", "👋",
+            "❤️", "💛", "💚", "💙", "💜", "🧡",
+            "🎉", "🎈", "⭐", "🔥", "🌈", "🍦",
+            "🍕", "🍎", "⚽", "🎮", "🚗", "🐶"
+        )
+        val grid = layoutInflater.inflate(R.layout.dialog_emoji_grid, null) as GridView
+        grid.adapter = ArrayAdapter(this, R.layout.item_emoji_grid, R.id.tvEmojiCell, emojis)
+        val dialog = AlertDialog.Builder(this)
             .setTitle("😊 选个表情")
-            .setAdapter(listAdapter) { _, i ->
-                send { chat?.sendEmoji(peerId, emojis[i]) }
-            }
-            .show()
+            .setView(grid)
+            .create()
+        grid.setOnItemClickListener { _, _, i, _ ->
+            send { chat?.sendEmoji(peerId, emojis[i]) }
+            dialog.dismiss()
+        }
+        dialog.show()
     }
 
     private fun onIncoming(m: Msg) {

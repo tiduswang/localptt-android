@@ -59,6 +59,9 @@ class VoiceActivity : AppCompatActivity() {
 
         findViewById<View>(R.id.btnBack).setOnClickListener { finish() }
 
+        // 顶部实时信号（我 / 对方）
+        findViewById<TextView>(R.id.tvLink).bindLinkQuality(this)
+
         findViewById<View>(R.id.btnSpeaker).setOnClickListener {
             val e = engine
             if (e == null) { toast("还没连上，先回首页建房间吧"); return@setOnClickListener }

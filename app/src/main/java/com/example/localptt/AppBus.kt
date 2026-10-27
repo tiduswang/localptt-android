@@ -11,6 +11,7 @@ import com.example.localptt.net.ControlClient
 import com.example.localptt.net.ControlServer
 import com.example.localptt.net.DiscoveryListener
 import com.example.localptt.net.HostBeacon
+import com.example.localptt.net.LinkQuality
 import com.example.localptt.net.UdpBus
 import com.example.localptt.net.WifiDirectManager
 import com.example.localptt.net.netGuard
@@ -123,7 +124,8 @@ object AppBus {
                         FeatureSync(
                             myId, "all", uid(),
                             activeFeature ?: "",
-                            com.example.localptt.data.Feature.STATE
+                            com.example.localptt.data.Feature.STATE,
+                            LinkQuality.reportable()
                         )
                     )
                 }
@@ -184,6 +186,8 @@ object AppBus {
         //   否则普通掉线重连时会误删正在使用的直连组。
         // chat / game 是单例，这里**不能**置空：功能页已经订阅了它们的 Flow
         peers.clear()
+        // 断网后旧的延迟数字没有意义，清掉，各页面会显示「—」
+        LinkQuality.reset()
     }
 
     /** 发送一条信令：主机走 ControlServer，客户端走 ControlClient（后台串行发送，不卡 UI）。 */

@@ -57,6 +57,9 @@ class GameActivity : AppCompatActivity() {
         tvStatus = findViewById(R.id.tvGameStatus)
         tvResult = findViewById(R.id.tvGameResult)
 
+        // 顶部实时信号（我 / 对方）
+        findViewById<TextView>(R.id.tvLink).bindLinkQuality(this)
+
         findViewById<View>(R.id.btnGameBack).setOnClickListener { finish() }
 
         findViewById<View>(R.id.btnInviteRps).setOnClickListener { startGame("rps") }

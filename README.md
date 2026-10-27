@@ -3,13 +3,13 @@
 > 纯本地、无外网、无需手动输入 IP 的 Android 局域网对讲应用：
 > **实时语音 / 实时视频 / 微聊 / 联机小游戏**。
 > 两台手机连**同一个路由器**能互通；**没有路由器**也能用 Wi-Fi Direct 直连。
-> 专为小朋友设计 —— 糖果色大图标 + 10 个卡通头像 + 一键互联。
+> 专为小朋友设计 —— 糖果色大图标 + 15 个卡通头像 + 一键互联。
 
 [![Platform](https://img.shields.io/badge/platform-Android-green.svg)](https://www.android.com/)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 [![Min SDK](https://img.shields.io/badge/minSdk-24_(Android_7.0)-orange.svg)](app/build.gradle.kts)
 [![Build](https://github.com/tiduswang/localptt-android/actions/workflows/build.yml/badge.svg)](https://github.com/tiduswang/localptt-android/actions/workflows/build.yml)
-[![Version](https://img.shields.io/badge/version-1.3.6-brightgreen.svg)](CHANGELOG.md)
+[![Version](https://img.shields.io/badge/version-1.3.7-brightgreen.svg)](CHANGELOG.md)
 
 ## ✨ 功能特性
 
@@ -24,7 +24,7 @@
 | 🔗 **零配置自动组网** | 「找小伙伴」同时合并三类来源：UDP 广播 / mDNS / Wi-Fi Direct 设备；连过的房间会自动回连 |
 | 📶 **Wi-Fi 门禁** | 没开 Wi-Fi 会提示并引导打开（Android 9- 直接自动打开，Android 10+ 拉系统面板），开好后**自动继续**刚才那一步 |
 | 👧 **儿童友好 UI** | 大 emoji 图标 + 糖果色卡片，功能一看就懂 |
-| 🐼 **头像 + 昵称** | 10 个矢量卡通头像 + 自定义昵称，随在线名单同步 |
+| 🐼 **头像 + 昵称** | 15 个矢量卡通头像（含布鲁伊一家和小蜜蜂）+ 自定义昵称，随在线名单同步 |
 | 🔄 **功能同步（同进同出）** | 一台进入/退出某功能，房间内其他设备同步进入/退出 |
 
 ---
@@ -45,7 +45,7 @@ gradlew.bat assembleDebug      # Windows
 > 产物：`app/build/outputs/apk/debug/app-debug.apk`（约 10 MB，包名 `com.example.localptt`）。
 
 不想自己编译？直接下载现成的安装包：
-**[localptt-1.3.6-debug.apk](https://github.com/tiduswang/localptt-android/releases/download/v1.3.6/localptt-1.3.6-debug.apk)**（debug 签名，仅用于测试）。
+**[localptt-1.3.7-debug.apk](https://github.com/tiduswang/localptt-android/releases/download/v1.3.7/localptt-1.3.7-debug.apk)**（debug 签名，仅用于测试）。
 
 ### 3. 真机运行与验收
 语音对讲 / 视频 / Wi-Fi Direct 需**真机**（模拟器不支持 P2P 与摄像头）。
@@ -159,7 +159,7 @@ Android对讲机应用/
 │       │   ├── game/   GameManager
 │       │   └── ui/     MainActivity  VoiceActivity  VideoActivity
 │       │              ChatActivity  GameActivity  ProfileActivity  PeerAdapter
-│       └── res/    # 糖果色 drawable（27 个 shape + 10 个头像 + ic_app）、布局、主题
+│       └── res/    # 糖果色 drawable（27 个 shape + 15 个头像 + ic_app）、布局、主题
 ├── gradle/wrapper/             # Gradle 包装器（已提交）
 ├── .github/workflows/build.yml # CI：自动构建 debug APK
 ├── README.md 设计与开发文档.md CHANGELOG.md CONTRIBUTING.md LICENSE

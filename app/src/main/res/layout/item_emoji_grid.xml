@@ -1,10 +1,10 @@
 <?xml version="1.0" encoding="utf-8"?>
-<!-- 表情选择弹窗里的一行：大号表情，小朋友一眼能认 -->
+<!-- 表情网格里的一格：只有 emoji，字号比过去小一点，一屏能放更多 -->
 <TextView xmlns:android="http://schemas.android.com/apk/res/android"
-    android:id="@+id/tvEmoji"
+    android:id="@+id/tvEmojiCell"
     android:layout_width="match_parent"
     android:layout_height="wrap_content"
     android:gravity="center"
-    android:paddingVertical="14dp"
-    android:textSize="32sp"
+    android:paddingVertical="8dp"
+    android:textSize="28sp"
     android:textColor="@color/kids_text" />

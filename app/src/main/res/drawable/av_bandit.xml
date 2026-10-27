@@ -1,0 +1,35 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- 班底特：深蓝色大狗（布鲁伊的爸爸） -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="48dp"
+    android:height="48dp"
+    android:viewportWidth="48"
+    android:viewportHeight="48">
+    <path
+        android:fillColor="#355F92"
+        android:pathData="M4.4,14.0 a5.6,5.6 0 1,0 11.2,0 a5.6,5.6 0 1,0 -11.2,0" />
+    <path
+        android:fillColor="#355F92"
+        android:pathData="M32.4,14.0 a5.6,5.6 0 1,0 11.2,0 a5.6,5.6 0 1,0 -11.2,0" />
+    <path
+        android:fillColor="#D8C3A6"
+        android:pathData="M7.2,14.0 a2.8,2.8 0 1,0 5.6,0 a2.8,2.8 0 1,0 -5.6,0" />
+    <path
+        android:fillColor="#D8C3A6"
+        android:pathData="M35.2,14.0 a2.8,2.8 0 1,0 5.6,0 a2.8,2.8 0 1,0 -5.6,0" />
+    <path
+        android:fillColor="#4A7DB5"
+        android:pathData="M10.0,28.5 a14.0,12.5 0 1,0 28.0,0 a14.0,12.5 0 1,0 -28.0,0" />
+    <path
+        android:fillColor="#E4D5BE"
+        android:pathData="M16.5,32.5 a7.5,5.5 0 1,0 15.0,0 a7.5,5.5 0 1,0 -15.0,0" />
+    <path
+        android:fillColor="#1D2A38"
+        android:pathData="M15.8,25.0 a2.2,2.2 0 1,0 4.4,0 a2.2,2.2 0 1,0 -4.4,0" />
+    <path
+        android:fillColor="#1D2A38"
+        android:pathData="M27.8,25.0 a2.2,2.2 0 1,0 4.4,0 a2.2,2.2 0 1,0 -4.4,0" />
+    <path
+        android:fillColor="#22303F"
+        android:pathData="M21.4,30.5 a2.6,1.9 0 1,0 5.2,0 a2.6,1.9 0 1,0 -5.2,0" />
+</vector>

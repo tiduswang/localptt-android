@@ -1,0 +1,52 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- 小蜜蜂：黄黑条纹的圆身子 + 白翅膀 + 触角 -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="48dp"
+    android:height="48dp"
+    android:viewportWidth="48"
+    android:viewportHeight="48">
+    <!-- 翅膀 -->
+    <path
+        android:fillColor="#FFFFFF"
+        android:fillAlpha="0.95"
+        android:pathData="M6.0,17.0 a7.0,8.5 0 1,0 14.0,0 a7.0,8.5 0 1,0 -14.0,0" />
+    <path
+        android:fillColor="#FFFFFF"
+        android:fillAlpha="0.95"
+        android:pathData="M28.0,17.0 a7.0,8.5 0 1,0 14.0,0 a7.0,8.5 0 1,0 -14.0,0" />
+    <!-- 触角 -->
+    <path
+        android:strokeColor="#3A2E1A"
+        android:strokeWidth="1.4"
+        android:strokeLineCap="round"
+        android:pathData="M18.0,20.0 C15.0,14.0 13.0,11.0 10.5,9.0" />
+    <path
+        android:strokeColor="#3A2E1A"
+        android:strokeWidth="1.4"
+        android:strokeLineCap="round"
+        android:pathData="M30.0,20.0 C33.0,14.0 35.0,11.0 37.5,9.0" />
+    <path
+        android:fillColor="#3A2E1A"
+        android:pathData="M9.2,8.5 a1.4,1.4 0 1,0 2.8,0 a1.4,1.4 0 1,0 -2.8,0" />
+    <path
+        android:fillColor="#3A2E1A"
+        android:pathData="M36.0,8.5 a1.4,1.4 0 1,0 2.8,0 a1.4,1.4 0 1,0 -2.8,0" />
+    <!-- 身体 -->
+    <path
+        android:fillColor="#F6C744"
+        android:pathData="M11.0,28.0 a13.0,12.0 0 1,0 26.0,0 a13.0,12.0 0 1,0 -26.0,0" />
+    <!-- 黑色条纹 -->
+    <path
+        android:fillColor="#3A2E1A"
+        android:pathData="M12.2,24.0 a11.8,1.7 0 1,0 23.6,0 a11.8,1.7 0 1,0 -23.6,0" />
+    <path
+        android:fillColor="#3A2E1A"
+        android:pathData="M12.0,31.0 a12.0,1.7 0 1,0 24.0,0 a12.0,1.7 0 1,0 -24.0,0" />
+    <!-- 眼睛 -->
+    <path
+        android:fillColor="#2A2214"
+        android:pathData="M17.7,20.5 a1.8,1.8 0 1,0 3.6,0 a1.8,1.8 0 1,0 -3.6,0" />
+    <path
+        android:fillColor="#2A2214"
+        android:pathData="M26.7,20.5 a1.8,1.8 0 1,0 3.6,0 a1.8,1.8 0 1,0 -3.6,0" />
+</vector>

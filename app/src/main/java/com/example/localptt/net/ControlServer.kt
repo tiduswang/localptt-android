@@ -113,7 +113,10 @@ class ControlServer(
                         // ② 广播最新名单（并本地环回给自己）
                         broadcastPeerList()
                     }
-                    is Pong -> Unit                       // 仅用于刷新 lastSeen
+                    is Ping ->                            // 客户端也会主动 Ping 来测信号
+                        peers[msg.from]?.send(Pong(myId, msg.from, uid(), msg.ts))
+                    is Pong ->                            // 心跳应答：顺便算出这条链路的往返延迟
+                        LinkQuality.noteRtt(System.currentTimeMillis() - msg.ts)
                     is Bye -> {
                         peers.remove(msg.from)
                         broadcastPeerList()

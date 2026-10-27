@@ -70,6 +70,9 @@ class ControlClient(
         private const val CONNECT_TIMEOUT_MS = 3000
         private const val CONNECT_RETRIES = 3
         private const val CONNECT_RETRY_DELAY = 900L
+
+        /** 客户端主动 Ping 的间隔（测「我」这一侧的信号）。 */
+        private const val LINK_PING_MS = 3000L
     }
 
     /**
@@ -115,6 +118,15 @@ class ControlClient(
                 runCatching { onPhase("connected") }
                 send(Hello(myId, "all", uid(), myName, "client", myAvatar, voicePort))
 
+                // ③ 主动 Ping 测信号：主机收到后原样回 Pong，读循环据此算延迟。
+                launch {
+                    while (true) {
+                        delay(LINK_PING_MS)
+                        if (sock == null) break
+                        send(Ping(myId, "all", uid(), System.currentTimeMillis()))
+                    }
+                }
+
                 // ① 超时未获主机确认 → 判失败
                 launch {
                     delay(CONFIRM_TIMEOUT_MS)
@@ -148,6 +160,11 @@ class ControlClient(
 
                     if (msg is Ping) {                     // 心跳：立即应答，不入业务流
                         send(Pong(myId, msg.from, uid(), msg.ts))
+                        continue
+                    }
+
+                    if (msg is Pong) {                     // 我自己 Ping 的回包：算出链路延迟
+                        LinkQuality.noteRtt(System.currentTimeMillis() - msg.ts)
                         continue
                     }
 

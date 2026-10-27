@@ -20,6 +20,7 @@ import com.example.localptt.data.VoiceMeta
 import com.example.localptt.game.GameManager
 import com.example.localptt.net.ControlClient
 import com.example.localptt.net.ControlServer
+import com.example.localptt.net.LinkQuality
 import com.example.localptt.net.HostBeacon
 import com.example.localptt.net.UdpBus
 import com.example.localptt.net.WifiDirectManager
@@ -641,6 +642,8 @@ object RoomManager {
                 is GameInvite, is GameCommit, is GameMove, is GameResult -> AppBus.game?.onMessage(msg)
                 is VideoCall -> AppBus.postVideo(msg)
                 is FeatureSync -> {
+                    // 对端随心跳带过来的信号值，给各功能页顶部的「📶 信号」用
+                    if (msg.from != AppBus.myId) LinkQuality.notePeerReport(msg.rttMs)
                     // 先更新「对端现在在哪个功能页」，功能页再据此决定自己要不要退出。
                     // state 心跳是空串时表示对端已回首页。
                     AppBus.peerActiveFeature = when (msg.action) {

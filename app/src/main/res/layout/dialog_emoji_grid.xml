@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- 表情面板：6 列网格，只显示 emoji 不带文字，小朋友自己挑 -->
+<GridView xmlns:android="http://schemas.android.com/apk/res/android"
+    android:id="@+id/gvEmoji"
+    android:layout_width="match_parent"
+    android:layout_height="wrap_content"
+    android:numColumns="6"
+    android:gravity="center"
+    android:stretchMode="columnWidth"
+    android:horizontalSpacing="2dp"
+    android:verticalSpacing="2dp"
+    android:padding="8dp"
+    android:listSelector="@android:color/transparent"
+    android:clipToPadding="false" />

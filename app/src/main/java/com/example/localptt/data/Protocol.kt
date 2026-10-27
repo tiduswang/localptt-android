@@ -154,7 +154,12 @@ data class Bye(
 data class FeatureSync(
     override val from: String, override val to: String, override val id: String,
     val feature: String,
-    val action: String
+    val action: String,
+    /**
+     * 发送方自己测到的往返延迟（ms，0 = 还没测到）。
+     * 借着每 2s 的状态心跳免费带到对端，让两端都能看到「对方的信号」。
+     */
+    val rttMs: Long = 0L
 ) : Msg
 
 /** 功能页常量，避免各处硬编码字符串写错。 */

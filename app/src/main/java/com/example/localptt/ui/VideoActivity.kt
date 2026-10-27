@@ -31,9 +31,8 @@ import kotlinx.coroutines.launch
  *
  * ★ v1.3.2 画面方向与全屏：
  *  - 远端画面改 TextureView（SurfaceView 不支持可靠的旋转/缩放），
- *    「↻ 转画面」按 90° 循环，解决「一台横、一台竖」的画面方向不一致（选择会记住）；
- *  - 「🔁 横屏/竖屏」手动切换页面方向；
- *  - 「⛶ 全屏」沉浸式全屏（横屏、隐藏上下按钮栏），此时自己的画面缩成左上角画中画画中画；
+ *    「🔄 转对方画面」按 90° 循环，解决「一台横、一台竖」的画面方向不一致（选择会记住）；
+ *  - 「⛶ 全屏」沉浸式全屏（横屏、隐藏上下按钮栏），此时自己的画面缩成左上角画中画；
  *    点远端画面也可直接切全屏；
  *  - 「🎤 麦克风」手动开关，关掉后不再把采集到的声音发给对方。
  *
@@ -51,7 +50,6 @@ class VideoActivity : AppCompatActivity() {
     private lateinit var localCard: FrameLayout
     private lateinit var videoContent: View
     private lateinit var btnRotate: TextView
-    private lateinit var btnOrientation: TextView
     private lateinit var btnFullscreen: TextView
     private lateinit var btnMic: TextView
 
@@ -77,9 +75,6 @@ class VideoActivity : AppCompatActivity() {
     /** 画面旋转角度（0/90/180/270），两端各自保存自己的偏好。 */
     private var videoRotation = 0
 
-    /** 是否横屏（手动切换的结果，退出全屏后恢复到这个状态）。 */
-    private var manualLandscape = false
-
     /** 是否处于沉浸式全屏。 */
     private var fullscreen = false
 
@@ -101,6 +96,9 @@ class VideoActivity : AppCompatActivity() {
         setContentView(R.layout.activity_video)
         AppBus.activeFeature = Feature.VIDEO
 
+        // 视频通话期间不要让屏幕自动熄灭（看孩子/看对方时不可能一直戳屏幕）。
+        window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+
         localPreview = findViewById(R.id.localPreview)
         remoteView = findViewById(R.id.remoteView)
         tvStatus = findViewById(R.id.tvVideoStatus)
@@ -108,18 +106,18 @@ class VideoActivity : AppCompatActivity() {
         localCard = findViewById(R.id.localCard)
         videoContent = findViewById(R.id.videoContent)
         btnRotate = findViewById(R.id.btnRotate)
-        btnOrientation = findViewById(R.id.btnOrientation)
         btnFullscreen = findViewById(R.id.btnFullscreen)
         btnMic = findViewById(R.id.btnMic)
 
+        // 顶部实时信号（我 / 对方）
+        findViewById<TextView>(R.id.tvLink).bindLinkQuality(this)
+
         videoRotation = prefs.getInt("videoRotation", 0)
-        manualLandscape = prefs.getBoolean("videoLandscape", false)
         readCameraInfo()
 
         findViewById<View>(R.id.btnVideoBack).setOnClickListener { finish() }
         findViewById<View>(R.id.btnInvite).setOnClickListener { inviteFirstPeer() }
         btnRotate.setOnClickListener { rotateVideo() }
-        btnOrientation.setOnClickListener { toggleOrientation() }
         btnFullscreen.setOnClickListener { setFullscreen(!fullscreen) }
         btnMic.setOnClickListener { toggleMic() }
         remoteView.setOnClickListener { setFullscreen(!fullscreen) }
@@ -254,7 +252,7 @@ class VideoActivity : AppCompatActivity() {
     private fun applyRotation() {
         // 远端画面整体旋转（对端发来的原样画面），自己小窗则按 sensor 方向单独摆正
         remoteView.rotation = videoRotation.toFloat()
-        btnRotate.text = "↻ 转画面 ${videoRotation}°"
+        btnRotate.text = "🔄 转画面 ${videoRotation}°"
 
         // 自己的小窗：始终按相机 sensor 方向摆正（「转画面」只管对方画面，不叠加到小窗上）
         val landscapePic = sensorCorrection() % 180 == 0
@@ -341,22 +339,17 @@ class VideoActivity : AppCompatActivity() {
         remoteView.layoutParams = lp
     }
 
-    /** 「🔁 横屏 / 竖屏」手动切换页面方向。 */
-    private fun toggleOrientation() {
-        manualLandscape = !manualLandscape
-        prefs.edit().putBoolean("videoLandscape", manualLandscape).apply()
-        if (!fullscreen) applyOrientation()
-        toast(if (manualLandscape) "已切到横屏" else "已切到竖屏")
-    }
-
+    /**
+     * 页面方向：只有全屏时才强制横屏，平时固定竖屏。
+     * ★ 1.3.7 去掉了独立的「🔁 横屏」按钮：全屏本身就会横屏，两个开关放一起
+     *   小朋友分不清「横屏」和「转画面」，容易以为点错了。
+     */
     private fun applyOrientation(forceLandscape: Boolean = false) {
-        val landscape = forceLandscape || manualLandscape
-        requestedOrientation = if (landscape) {
+        requestedOrientation = if (forceLandscape) {
             ActivityInfo.SCREEN_ORIENTATION_LANDSCAPE
         } else {
             ActivityInfo.SCREEN_ORIENTATION_PORTRAIT
         }
-        btnOrientation.text = if (manualLandscape) "🔁 竖屏" else "🔁 横屏"
     }
 
     /**
@@ -375,11 +368,9 @@ class VideoActivity : AppCompatActivity() {
         )
         btnFullscreen.text = if (on) "⤢ 退出全屏" else "⛶ 全屏"
         if (on) {
-            window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
             hideSystemBars()
             applyOrientation(forceLandscape = true)
         } else {
-            window.clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
             showSystemBars()
             applyOrientation()
         }
