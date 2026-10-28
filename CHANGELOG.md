@@ -2,6 +2,20 @@
 
 本项目遵循 [语义化版本](https://semver.org/lang/zh-CN/) 与 Keep a Changelog 风格。
 
+## [1.4.2] - 2026-10-28
+
+**小窗彻底重做：改用 Google Camera2 官方 Matrix 变换，放弃不可靠的 View.rotation。**
+
+### 修复（Fixed）
+- **人还是横着 / 只在「侧躺 / 倒立」之间跳（照片实证）**：`View.rotation`
+  在部分机型上转不动 TextureView 的画面内容。彻底放弃该方案，改用
+  Google Camera2 官方示例（Camera2Basic）的 `TextureView.setTransform(Matrix)`：
+  在纹理自己的坐标系里做旋转 + center-crop 填满，兼容性最好。
+- **人像被压扁**：旋转变换在矩阵里按 4:3 缓冲精确计算，小窗保持 4:3，
+  不再出现硬拉伸变形。
+- **镜像**：旋转移到纹理层后，前置相机在 View 层固定 `scaleX=-1`
+  水平镜像即可，不再随角度换轴。
+
 ## [1.4.1] - 2026-10-28
 
 **竖屏时小窗再也不会横躺：内容必须转 90°/270°，点屏只在「正 / 倒」之间切换。**
