@@ -90,9 +90,6 @@ class VideoActivity : AppCompatActivity() {
 
     // ---------- 相机画面方向（本地画中画用） ----------
 
-    /** 相机 sensor 方向（多数机型前置是 270°）。 */
-    private var camSensor = 90
-
     /** 是否前置相机（前置要镜像显示，像个镜子）。 */
     private var camFront = true
 
@@ -120,7 +117,8 @@ class VideoActivity : AppCompatActivity() {
         findViewById<TextView>(R.id.tvLink).bindLinkQuality(this)
 
         videoRotation = prefs.getInt("videoRotation", 0)
-        pipRotationOffset = prefs.getInt("pipRotationOffset", 0)
+        // 换成新 key：旧版存下的「自动+手动」角度会让新版本一上来就不正，这里重新从 0° 开始
+        pipRotationOffset = prefs.getInt("pipRotationOffset2", 0)
         readCameraInfo()
 
         findViewById<View>(R.id.btnVideoBack).setOnClickListener { finish() }
@@ -262,27 +260,22 @@ class VideoActivity : AppCompatActivity() {
     /** 点大屏（或小窗角的 🔄）：把小窗方向转 90°，选择会记住。人不正就再点一下。 */
     private fun rotatePip() {
         pipRotationOffset = (pipRotationOffset + 90) % 360
-        prefs.edit().putInt("pipRotationOffset", pipRotationOffset).apply()
+        prefs.edit().putInt("pipRotationOffset2", pipRotationOffset).apply()
         applyRotation()
-        toast("小画面 ${pipAngle()}°，人不正就再点一下")
+        toast("小画面 ${pipAngle()}°（0° = 不转；人不正就再点一下）")
     }
 
     /**
-     * 小窗最终角度 = 相机自动摆正 + 手动点出来的修正。
+     * 小窗角度 = **纯手动**（默认 0°，即完全不转）。
      *
-     * ★ 1.4.1 硬保证：竖屏页面下小窗内容**必须**转 90°/270°。
-     *   相机原始画幅是横的，不转人必歪；但有些机型把 sensor 方向报成 0°，
-     *   自动摆正会漏掉这一步（照片实证：小窗横着、人侧躺）。
-     *   所以竖屏页面算出 0°/180° 时强制补 90°，这样点屏只会在
-     *   「正 / 倒」两个竖直状态间切换，再也不会出现横躺。
+     * ★ 1.4.4 的结论来自实测：这台手机（折叠屏）的前置相机预览本身已经是正的，
+     *   再叠加「按 sensor 方向自动摆正」反而把人转倒 —— 1.3.9 的反馈
+     *   「横着的时候人是正着的、竖着的时候人是倒着的」已经说明角度 0 才是对的；
+     *   1.4.1 又硬性补了 90°，于是这台机器上「一直横着」。
+     *   所以现在不再用任何自动角度：默认 0°，需要时点大屏 / 🔄 每次转 90°，
+     *   选择会记住。这样两种机型都能手动调到正。
      */
-    private fun pipAngle(): Int {
-        var a = (sensorCorrection() + pipRotationOffset) % 360
-        if (!fullscreen && displayRotationDegrees() % 180 == 0 && a % 180 == 0) {
-            a = (a + 90) % 360
-        }
-        return a
-    }
+    private fun pipAngle(): Int = pipRotationOffset % 360
 
     /** 把旋转与「补齐尺寸」同时应用到两块画面：转 90/270 时宽高交换，否则会被裁掉。 */
     private fun applyRotation() {
@@ -303,39 +296,10 @@ class VideoActivity : AppCompatActivity() {
         fitRotatedRemote()
     }
 
-    /** 读取相机方向信息（挑相机的逻辑与 [VideoCallSession] 保持一致）。 */
+    /** 读取相机信息（判断前置/后置，用于小窗镜像）。 */
     private fun readCameraInfo() {
         val info = VideoCallSession.pickCamera(this) ?: return
-        camSensor = info.sensorOrientation
         camFront = info.front
-    }
-
-    /** 当前屏幕方向（0/90/180/270）。 */
-    private fun displayRotationDegrees(): Int {
-        @Suppress("DEPRECATION")   // minSdk 24：display.rotation 要 API 30 才有
-        val rot = if (android.os.Build.VERSION.SDK_INT >= 30) {
-            display?.rotation ?: android.view.Surface.ROTATION_0
-        } else {
-            windowManager.defaultDisplay.rotation
-        }
-        return when (rot) {
-            android.view.Surface.ROTATION_90 -> 90
-            android.view.Surface.ROTATION_180 -> 180
-            android.view.Surface.ROTATION_270 -> 270
-            else -> 0
-        }
-    }
-
-    /**
-     * 相机 sensor 方向换算成「显示时需要转多少度」：
-     *  - 后置：sensor 角度 - 屏幕旋转；
-     *  - 前置：sensor 角度 + 屏幕旋转，再取反（前置画面是镜像的，Camera1 时代的经典公式）。
-     * 例：多数手机前置 sensor=270、竖屏 → 90°，转 90° 人就是正的。
-     */
-    private fun sensorCorrection(): Int {
-        val deg = displayRotationDegrees()
-        return if (camFront) (360 - (camSensor + deg) % 360) % 360
-        else (camSensor - deg + 360) % 360
     }
 
     /**
