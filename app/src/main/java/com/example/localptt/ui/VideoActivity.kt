@@ -130,6 +130,8 @@ class VideoActivity : AppCompatActivity() {
         btnMic.setOnClickListener { toggleMic() }
         // 点大屏 = 切换左上角小窗的方向（不再进全屏，全屏只走「⛶ 全屏」按钮）
         remoteView.setOnClickListener { rotatePip() }
+        // 小窗右上角的 🔄 按钮也一样（更明显，孩子知道点哪里）
+        findViewById<View>(R.id.btnPipRotate).setOnClickListener { rotatePip() }
 
         // ① 等两个 Surface 都就绪再建会话（Camera2 必须拿到有效 Surface）
         localPreview.surfaceTextureListener = object : TextureView.SurfaceTextureListener {
@@ -257,16 +259,30 @@ class VideoActivity : AppCompatActivity() {
         toast("画面已旋转到 $videoRotation°")
     }
 
-    /** 点大屏：把小窗方向转 90°（0→90→180→270→0），选择会记住。倒着就连点两下。 */
+    /** 点大屏（或小窗角的 🔄）：把小窗方向转 90°，选择会记住。人不正就再点一下。 */
     private fun rotatePip() {
         pipRotationOffset = (pipRotationOffset + 90) % 360
         prefs.edit().putInt("pipRotationOffset", pipRotationOffset).apply()
         applyRotation()
-        toast("小画面已转到 ${pipAngle()}°（人倒着就再点两下）")
+        toast("小画面 ${pipAngle()}°，人不正就再点一下")
     }
 
-    /** 小窗最终角度 = 相机自动摆正 + 手动点出来的修正。 */
-    private fun pipAngle(): Int = (sensorCorrection() + pipRotationOffset) % 360
+    /**
+     * 小窗最终角度 = 相机自动摆正 + 手动点出来的修正。
+     *
+     * ★ 1.4.1 硬保证：竖屏页面下小窗内容**必须**转 90°/270°。
+     *   相机原始画幅是横的，不转人必歪；但有些机型把 sensor 方向报成 0°，
+     *   自动摆正会漏掉这一步（照片实证：小窗横着、人侧躺）。
+     *   所以竖屏页面算出 0°/180° 时强制补 90°，这样点屏只会在
+     *   「正 / 倒」两个竖直状态间切换，再也不会出现横躺。
+     */
+    private fun pipAngle(): Int {
+        var a = (sensorCorrection() + pipRotationOffset) % 360
+        if (!fullscreen && displayRotationDegrees() % 180 == 0 && a % 180 == 0) {
+            a = (a + 90) % 360
+        }
+        return a
+    }
 
     /** 把旋转与「补齐尺寸」同时应用到两块画面：转 90/270 时宽高交换，否则会被裁掉。 */
     private fun applyRotation() {
