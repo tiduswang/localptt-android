@@ -33,7 +33,7 @@ import kotlinx.coroutines.launch
  *  - 远端画面改 TextureView（SurfaceView 不支持可靠的旋转/缩放），
  *    「🔄 转对方画面」按 90° 循环，解决「一台横、一台竖」的画面方向不一致（选择会记住）；
  *  - 「⛶ 全屏」沉浸式全屏（横屏、隐藏上下按钮栏），此时自己的画面缩成左上角画中画；
- *    点远端画面也可直接切全屏；
+ *    1.3.9 起：点大屏 = 把左上角小窗转 90°（不再进全屏，全屏只走按钮）；
  *  - 「🎤 麦克风」手动开关，关掉后不再把采集到的声音发给对方。
  *
  * ★ 历史 Bug 修复（「视频用不了，摄像头麦克风都没启用」）：
@@ -75,6 +75,13 @@ class VideoActivity : AppCompatActivity() {
     /** 画面旋转角度（0/90/180/270），两端各自保存自己的偏好。 */
     private var videoRotation = 0
 
+    /**
+     * 小窗（画中画）方向的手动修正（0/90/180/270）。
+     * 有些机型上报的相机 sensor 方向不准，自动摆正会失效（人还是横着），
+     * 所以点一下大屏就把小窗转 90°，转到孩子看着是正的为止，选择会记住。
+     */
+    private var pipRotationOffset = 0
+
     /** 是否处于沉浸式全屏。 */
     private var fullscreen = false
 
@@ -113,6 +120,7 @@ class VideoActivity : AppCompatActivity() {
         findViewById<TextView>(R.id.tvLink).bindLinkQuality(this)
 
         videoRotation = prefs.getInt("videoRotation", 0)
+        pipRotationOffset = prefs.getInt("pipRotationOffset", 0)
         readCameraInfo()
 
         findViewById<View>(R.id.btnVideoBack).setOnClickListener { finish() }
@@ -120,7 +128,8 @@ class VideoActivity : AppCompatActivity() {
         btnRotate.setOnClickListener { rotateVideo() }
         btnFullscreen.setOnClickListener { setFullscreen(!fullscreen) }
         btnMic.setOnClickListener { toggleMic() }
-        remoteView.setOnClickListener { setFullscreen(!fullscreen) }
+        // 点大屏 = 切换左上角小窗的方向（不再进全屏，全屏只走「⛶ 全屏」按钮）
+        remoteView.setOnClickListener { rotatePip() }
 
         // ① 等两个 Surface 都就绪再建会话（Camera2 必须拿到有效 Surface）
         localPreview.surfaceTextureListener = object : TextureView.SurfaceTextureListener {
@@ -248,14 +257,25 @@ class VideoActivity : AppCompatActivity() {
         toast("画面已旋转到 $videoRotation°")
     }
 
+    /** 点大屏：把小窗方向转 90°（0→90→180→270→0），选择会记住。 */
+    private fun rotatePip() {
+        pipRotationOffset = (pipRotationOffset + 90) % 360
+        prefs.edit().putInt("pipRotationOffset", pipRotationOffset).apply()
+        applyRotation()
+        toast("小画面已转到 ${pipAngle()}°")
+    }
+
+    /** 小窗最终角度 = 相机自动摆正 + 手动点出来的修正。 */
+    private fun pipAngle(): Int = (sensorCorrection() + pipRotationOffset) % 360
+
     /** 把旋转与「补齐尺寸」同时应用到两块画面：转 90/270 时宽高交换，否则会被裁掉。 */
     private fun applyRotation() {
         // 远端画面整体旋转（对端发来的原样画面），自己小窗则按 sensor 方向单独摆正
         remoteView.rotation = videoRotation.toFloat()
         btnRotate.text = "🔄 转画面 ${videoRotation}°"
 
-        // 自己的小窗：始终按相机 sensor 方向摆正（「转画面」只管对方画面，不叠加到小窗上）
-        val landscapePic = sensorCorrection() % 180 == 0
+        // 自己的小窗：按「自动摆正 + 手动修正」的最终角度决定竖窗还是横窗
+        val landscapePic = pipAngle() % 180 == 0
         val lp = localCard.layoutParams as FrameLayout.LayoutParams
         lp.width = dp(if (landscapePic) 148 else 104)
         lp.height = dp(if (landscapePic) 104 else 148)
@@ -318,7 +338,7 @@ class VideoActivity : AppCompatActivity() {
      *   所以 0°/180° 用 scaleX，90°/270° 用 scaleY，始终保持「水平镜像」。
      */
     private fun applyLocalPreviewTransform() {
-        val angle = sensorCorrection()
+        val angle = pipAngle()
 
         // 转 90/270 时把预览 View 的宽高互换（居中），旋转后正好铺满小窗
         val cw = localCard.width
@@ -376,7 +396,7 @@ class VideoActivity : AppCompatActivity() {
 
     /**
      * 全屏：沉浸式 + 横屏 + 隐藏顶部/底部按钮栏，自己的画面缩成左上角画中画。
-     * 点远端画面或「⤢ 退出全屏」可退出。
+     * 「⤢ 退出全屏」按钮可退出。
      */
     private fun setFullscreen(on: Boolean) {
         if (fullscreen == on) return

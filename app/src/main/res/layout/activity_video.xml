@@ -82,7 +82,7 @@
 
             <TextView
                 android:id="@+id/tvRemoteTag"
-                android:text="🧒 这是小伙伴"
+                android:text="🧒 小伙伴 ｜ 点大屏转小画面"
                 android:textSize="12sp"
                 android:textColor="#FFE9C7"
                 android:background="#66000000"
