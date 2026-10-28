@@ -95,8 +95,8 @@
 
             <FrameLayout
                 android:id="@+id/localCard"
-                android:layout_width="104dp"
-                android:layout_height="148dp"
+                android:layout_width="108dp"
+                android:layout_height="144dp"
                 android:layout_gravity="top|start"
                 android:layout_margin="8dp"
                 android:background="@drawable/shape_screen"

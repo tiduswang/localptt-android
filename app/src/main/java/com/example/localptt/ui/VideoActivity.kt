@@ -257,12 +257,12 @@ class VideoActivity : AppCompatActivity() {
         toast("画面已旋转到 $videoRotation°")
     }
 
-    /** 点大屏：把小窗方向转 90°（0→90→180→270→0），选择会记住。 */
+    /** 点大屏：把小窗方向转 90°（0→90→180→270→0），选择会记住。倒着就连点两下。 */
     private fun rotatePip() {
         pipRotationOffset = (pipRotationOffset + 90) % 360
         prefs.edit().putInt("pipRotationOffset", pipRotationOffset).apply()
         applyRotation()
-        toast("小画面已转到 ${pipAngle()}°")
+        toast("小画面已转到 ${pipAngle()}°（人倒着就再点两下）")
     }
 
     /** 小窗最终角度 = 相机自动摆正 + 手动点出来的修正。 */
@@ -274,11 +274,13 @@ class VideoActivity : AppCompatActivity() {
         remoteView.rotation = videoRotation.toFloat()
         btnRotate.text = "🔄 转画面 ${videoRotation}°"
 
-        // 自己的小窗：按「自动摆正 + 手动修正」的最终角度决定竖窗还是横窗
+        // 自己的小窗：按「自动摆正 + 手动修正」的最终角度决定竖窗还是横窗。
+        // ★ 1.4.0：小窗严格用 4:3（和相机 640×480 画幅一致），
+        //   TextureView 是拉伸铺满的，窗口不是 4:3 人就会被拉扁/压长。
         val landscapePic = pipAngle() % 180 == 0
         val lp = localCard.layoutParams as FrameLayout.LayoutParams
-        lp.width = dp(if (landscapePic) 148 else 104)
-        lp.height = dp(if (landscapePic) 104 else 148)
+        lp.width = dp(if (landscapePic) 144 else 108)
+        lp.height = dp(if (landscapePic) 108 else 144)
         lp.gravity = Gravity.TOP or Gravity.START
         localCard.layoutParams = lp
         applyLocalPreviewTransform()
