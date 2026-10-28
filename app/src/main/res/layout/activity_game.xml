@@ -62,6 +62,20 @@
                 android:layout_height="wrap_content" />
         </LinearLayout>
 
+        <!-- 比分板：本次进入游戏后累计，退出重进自动归零 -->
+        <TextView
+            android:id="@+id/tvGameScore"
+            android:text="🏆 比分　你 0 ｜ 小伙伴 0 ｜ 平局 0"
+            android:textSize="16sp"
+            android:textStyle="bold"
+            android:textColor="@color/kids_text"
+            android:gravity="center"
+            android:background="@drawable/shape_card_white"
+            android:paddingVertical="10dp"
+            android:layout_marginTop="12dp"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content" />
+
         <!-- 结果大卡 -->
         <FrameLayout
             android:layout_marginTop="12dp"

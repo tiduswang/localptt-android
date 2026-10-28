@@ -339,55 +339,45 @@ class VideoActivity : AppCompatActivity() {
     }
 
     /**
-     * ★★ 1.4.2 彻底重做：放弃 View.rotation（在部分机型上转不动内容，只会
-     *   在「侧躺 / 倒立」之间跳），改用 Google Camera2 官方示例的
-     *   TextureView.setTransform(Matrix) —— 在纹理自己的坐标系里做旋转，
-     *   兼容性最好。View 本身保持铺满小窗、不旋转。
+     * ★★ 1.4.3：小窗「旋转」和「不变形」同时成立的关键 —— 预览 View 永远保持
+     *   相机缓冲的 4:3 横画幅（144×108dp），只在 View 层做旋转；
+     *   小窗（localCard）则按角度换横竖（转了 90° 就变 108×144 竖窗）。
      *
-     * 镜像：旋转发生在纹理层，View 层不再转，所以前置相机固定
-     *   scaleX=-1 水平镜像即可（像照镜子），与角度无关。
+     *   这样：拉伸比例恒为 1:1（144×108 里画 4:3 缓冲 = 不失真），
+     *   旋转 90° 后正好铺满竖窗，横窗/竖窗都不会拉长或压扁人。
+     *
+     * ★ 为什么不再用 setTransform(Matrix)：在实测机型上矩阵只改了比例、
+     *   旋转没有生效（照片实证：比例对了但人依旧横着）；而 View.rotation
+     *   在 1.3.9 的反馈里确实能把人转正，只是当时尺寸算错导致拉扁。
+     *
+     * ★ 尺寸一律用 dp 常量，**不再读 localCard.width**：applyRotation() 刚改完
+     *   layoutParams 时布局还没刷新，读到的是旧宽高 —— 这正是上一版「人被拉扁」
+     *   的真正原因（竖窗 108×144 被套进旧尺寸里硬拉伸）。
      */
     private fun applyLocalPreviewTransform() {
-        val vw = localPreview.width
-        val vh = localPreview.height
-        if (vw <= 0 || vh <= 0) return
-
         val angle = pipAngle()
 
-        // 预览 View 铺满小窗，不再用 View.rotation
+        // 预览固定 4:3 横画幅（与 640×480 缓冲一致），居中，比例 1:1 绝不拉伸
+        val w = dp(144)
+        val h = dp(108)
         val lp = localPreview.layoutParams as FrameLayout.LayoutParams
-        if (lp.width != ViewGroup.LayoutParams.MATCH_PARENT) {
-            lp.width = ViewGroup.LayoutParams.MATCH_PARENT
-            lp.height = ViewGroup.LayoutParams.MATCH_PARENT
+        if (lp.width != w || lp.height != h) {
+            lp.width = w
+            lp.height = h
             lp.gravity = Gravity.CENTER
             localPreview.layoutParams = lp
         }
-        localPreview.rotation = 0f
 
-        // 相机缓冲永远是横向 4:3（640×480 / 320×240），算变换只有比例重要
-        val bufW = 4f
-        val bufH = 3f
-        // 旋转 90/270 后，缓冲的「可视宽高」互换（Google Camera2Basic 的做法）
-        val rotW = if (angle % 180 == 0) bufW else bufH
-        val rotH = if (angle % 180 == 0) bufH else bufW
+        localPreview.rotation = angle.toFloat()
 
-        val matrix = android.graphics.Matrix()
-        val viewRect = android.graphics.RectF(0f, 0f, vw.toFloat(), vh.toFloat())
-        val bufferRect = android.graphics.RectF(0f, 0f, rotW, rotH)
-        val cx = viewRect.centerX()
-        val cy = viewRect.centerY()
-        bufferRect.offset(cx - bufferRect.centerX(), cy - bufferRect.centerY())
-        matrix.setRectToRect(viewRect, bufferRect, android.graphics.Matrix.ScaleToFit.FILL)
-        // center-crop 填满小窗（小窗本身是 4:3，基本无裁剪）。
-        // 注意：scale 用未互换的缓冲宽高，与 Camera2Basic 示例保持一致。
-        val scale = Math.max(vh / bufH, vw / bufW)
-        matrix.postScale(scale, scale, cx, cy)
-        matrix.postRotate(angle.toFloat(), cx, cy)
-        localPreview.setTransform(matrix)
-
-        // 前置相机：View 层固定水平镜像（纹理层旋转不影响这个镜像轴）
-        if (camFront) { localPreview.scaleX = -1f; localPreview.scaleY = 1f }
-        else          { localPreview.scaleX = 1f;  localPreview.scaleY = 1f }
+        // 前置相机像照镜子一样水平镜像。Android 变换顺序是 scale→rotate，
+        // 所以 0°/180° 要翻 X 轴，90°/270° 要翻 Y 轴，最终才是「水平镜像」。
+        if (camFront) {
+            if (angle % 180 == 0) { localPreview.scaleX = -1f; localPreview.scaleY = 1f }
+            else                  { localPreview.scaleX = 1f;  localPreview.scaleY = -1f }
+        } else {
+            localPreview.scaleX = 1f; localPreview.scaleY = 1f
+        }
     }
 
     /** 远端画面旋转 90/270 时要按舞台尺寸交换宽高，并居中，才能铺满不被裁。 */

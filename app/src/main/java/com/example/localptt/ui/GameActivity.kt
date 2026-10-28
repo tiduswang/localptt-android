@@ -49,6 +49,22 @@ class GameActivity : AppCompatActivity() {
     /** 我最近一次出招的局号，用于过滤重放的旧结果。 */
     private var lastPlayedRound = 0
 
+    // ---------- 比分（每次进入本页清零） ----------
+
+    /** 我赢了几局。 */
+    private var myWins = 0
+
+    /** 对方赢了几局。 */
+    private var peerWins = 0
+
+    /** 平局几局。 */
+    private var drawCount = 0
+
+    /** 已经计过分的最大局号 —— 结果流重放同一局时不会重复加分。 */
+    private var scoredRound = 0
+
+    private lateinit var tvScore: TextView
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         setContentView(R.layout.activity_game)
@@ -56,6 +72,16 @@ class GameActivity : AppCompatActivity() {
 
         tvStatus = findViewById(R.id.tvGameStatus)
         tvResult = findViewById(R.id.tvGameResult)
+        tvScore = findViewById(R.id.tvGameScore)
+
+        // 比分只在本页存活期间累计：重新进入游戏页 = 全新比分（旋转屏幕不算重进）
+        if (savedInstanceState != null) {
+            myWins = savedInstanceState.getInt("myWins", 0)
+            peerWins = savedInstanceState.getInt("peerWins", 0)
+            drawCount = savedInstanceState.getInt("drawCount", 0)
+            scoredRound = savedInstanceState.getInt("scoredRound", 0)
+        }
+        renderScore()
 
         // 顶部实时信号（我 / 对方）
         findViewById<TextView>(R.id.tvLink).bindLinkQuality(this)
@@ -129,6 +155,22 @@ class GameActivity : AppCompatActivity() {
         AppBus.activeFeature = Feature.GAME
     }
 
+    override fun onSaveInstanceState(outState: Bundle) {
+        super.onSaveInstanceState(outState)
+        outState.putInt("myWins", myWins)
+        outState.putInt("peerWins", peerWins)
+        outState.putInt("drawCount", drawCount)
+        outState.putInt("scoredRound", scoredRound)
+    }
+
+    /** 刷新比分板：你 X ｜ 小伙伴 Y ｜ 平局 Z。 */
+    private fun renderScore() {
+        val peerName = AppBus.peers.firstOrNull { it.id == peerId }?.name
+            ?: AppBus.others.firstOrNull()?.name
+            ?: "小伙伴"
+        tvScore.text = "🏆 比分　你 $myWins ｜ $peerName $peerWins ｜ 平局 $drawCount"
+    }
+
     private fun startGame(type: String) {
         val peer = AppBus.others.firstOrNull()
         if (peer == null) {
@@ -140,6 +182,7 @@ class GameActivity : AppCompatActivity() {
         game?.reset(peer.id)
         everPlayed = false
         lastPlayedRound = 0
+        scoredRound = 0          // 换了游戏局号从 1 重新开始，别让旧局号挡住计分
         game?.invite(peer.id, type)
         tvStatus.text = "第 1 局 · 已邀请 ${peer.name} 玩 ${gameName(type)}，快出招！"
         tvResult.text = if (type == "dice") "🎲 点「掷骰子」开扔～" else "🤔 出招后等结果…"
@@ -194,6 +237,16 @@ class GameActivity : AppCompatActivity() {
         if (!everPlayed || r.round == 0 || r.round < lastPlayedRound) return
         runOnUiThread {
             val peerName = AppBus.peers.firstOrNull { it.id == r.to }?.name ?: "小伙伴"
+            // 计分：只有「新的一局」才加分，结果流重放旧局不会重复累加
+            if (r.round > scoredRound) {
+                scoredRound = r.round
+                when (r.winner) {
+                    AppBus.myId -> myWins++
+                    "draw" -> drawCount++
+                    else -> peerWins++
+                }
+                renderScore()
+            }
             val w = when (r.winner) {
                 AppBus.myId -> "🎉 你赢啦！"
                 "draw" -> "🤝 平局，再来一局！"
@@ -249,6 +302,7 @@ class GameActivity : AppCompatActivity() {
         findViewById<TextView>(R.id.tvGamePeer)?.text = "🧒 对手：${peer?.name ?: "还没选"}"
         findViewById<android.widget.ImageView>(R.id.ivGamePeerAvatar)
             ?.setImageResource(Avatars.drawableOf(peer?.avatar ?: "bear"))
+        renderScore()
     }
 
     /** 对端 id → 昵称，拿不到就显示 id。 */
